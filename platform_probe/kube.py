@@ -11,6 +11,8 @@ from dataclasses import dataclass
 
 import aiohttp
 
+from .service import read_body
+
 SA_DIR = "/var/run/secrets/kubernetes.io/serviceaccount"
 
 
@@ -49,7 +51,7 @@ class Kube:
 
     def _client(self) -> aiohttp.ClientSession:
         if self._session is None:
-            ctx = ssl.create_default_context(cafile=self.ca_file)
+            ctx = ssl.create_default_context(cafile=self.ca_file or None)
             self._session = aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=10), connector=aiohttp.TCPConnector(ssl=ctx)
             )
@@ -64,7 +66,7 @@ class Kube:
             token = f.read().strip()
         headers = {"Authorization": "Bearer " + token, "Accept": "application/json"}
         async with self._client().get(self.base + path, headers=headers) as resp:
-            body = await resp.content.read(8 << 20)
+            body = await read_body(resp, 8 << 20)
             try:
                 obj = json.loads(body)
             except ValueError:
@@ -73,7 +75,7 @@ class Kube:
                 message = obj.get("message", "") if isinstance(obj, dict) else ""
                 raise StatusError(resp.status, message)
             if not isinstance(obj, dict):
-                raise KubeError(f"{path}: not a JSON object")
+                raise KubeError(f"{path}: not a JSON object ({len(body)} bytes)")
             return obj
 
     async def close(self) -> None:

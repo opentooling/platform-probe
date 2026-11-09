@@ -279,7 +279,7 @@ class Service:
                 headers.add(k, v)
         try:
             async with self.client().request(incoming.method, base.rstrip("/") + "/", headers=headers) as resp:
-                body = await resp.content.read(1 << 20)
+                body = await read_body(resp, 1 << 20)
                 status = resp.status
         except Exception as e:  # noqa: BLE001 - every failure is reported in the hop
             return Hop(service=base, error=describe_error(e), elapsed_ms=int((time.monotonic() - start) * 1000))
@@ -319,6 +319,18 @@ class Service:
             res.error_kind, res.error = classify_error(e), describe_error(e)
         res.elapsed_ms = int((time.monotonic() - start) * 1000)
         return json_response(200, res.to_dict())
+
+
+async def read_body(resp: aiohttp.ClientResponse, limit: int) -> bytes:
+    """The whole body, up to limit bytes. content.read(n) alone returns only what has arrived
+    so far, so a body that comes in several chunks would be cut short."""
+    buf = bytearray()
+    while len(buf) < limit:
+        chunk = await resp.content.read(limit - len(buf))
+        if not chunk:
+            break
+        buf += chunk
+    return bytes(buf)
 
 
 async def healthz(_request: web.Request) -> web.Response:

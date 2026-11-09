@@ -28,7 +28,7 @@ from multidict import CIMultiDict, CIMultiDictProxy
 
 from .config import Config, Limit
 from .kube import Kube
-from .service import FetchResult, Hop, describe_error
+from .service import FetchResult, Hop, describe_error, read_body
 
 log = logging.getLogger(__name__)
 
@@ -200,7 +200,7 @@ async def do(session: aiohttp.ClientSession, method: str, url: str, headers: dic
     start = time.monotonic()
     try:
         async with session.request(method, url, headers=headers, allow_redirects=False) as resp:
-            raw = await resp.content.read(1 << 20)
+            raw = await read_body(resp, 1 << 20)
             out = Resp(status=resp.status, headers=resp.headers)
     except Exception as e:  # noqa: BLE001 - a failed request is a result
         return Resp(err=e, dur=time.monotonic() - start)
