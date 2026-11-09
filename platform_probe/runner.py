@@ -43,6 +43,13 @@ class Status(StrEnum):
 GROUP_PLATFORM = "Platform"
 GROUP_GATEWAY = "API gateway"
 GROUP_MESH = "Service mesh"
+GROUP_INGRESS = "Ingress & certificates"
+GROUP_WORKLOADS = "Workload security"
+GROUP_STORAGE = "Storage"
+
+# The connectivity suite (the three groups above) always runs; the others are switched on in
+# the chart's suites.* values.
+CONNECTIVITY = "connectivity"
 
 
 @dataclass
@@ -75,18 +82,19 @@ class Check:
     group: str
     name: str
     run: CheckFn
+    suite: str = CONNECTIVITY
 
 
 _registry: list[Check] = []
 
 
-def check(check_id: str, group: str, name: str) -> Callable[[CheckFn], CheckFn]:
-    """Register a check. The suite runs checks in the order they are registered."""
+def check(check_id: str, group: str, name: str, suite: str = CONNECTIVITY) -> Callable[[CheckFn], CheckFn]:
+    """Register a check. Checks run in the order they are registered."""
 
     def register(fn: CheckFn) -> CheckFn:
         if any(c.id == check_id for c in _registry):
             raise ValueError(f"duplicate check id {check_id}")
-        _registry.append(Check(check_id, group, name, fn))
+        _registry.append(Check(check_id, group, name, fn, suite))
         return fn
 
     return register
@@ -275,12 +283,22 @@ class Probe:
     def __init__(self, cfg: Config, kube: Kube | None = None, checks: list[Check] | None = None):
         self.cfg = cfg
         self.kube = kube if kube is not None else Kube()
-        self.checks = checks if checks is not None else all_checks()
+        self.checks = checks if checks is not None else [c for c in all_checks() if self.suite_enabled(c.suite)]
+        # Per run: an ID that labels what the run creates, state checks share (the storage
+        # checks reuse one PVC), and undo actions run when the run ends.
+        self.run_id = ""
+        self.state: dict = {}
         self._report = Report()
         self._gateway: aiohttp.ClientSession | None = None
         self._mesh: aiohttp.ClientSession | None = None
         self.token_value = ""
         self.token_expires = 0.0
+
+    def suite_enabled(self, suite: str) -> bool:
+        if suite == CONNECTIVITY:
+            return True
+        s = getattr(self.cfg.suites, suite, None)
+        return bool(s and s.enabled)
 
     # Sessions are created on first use, inside the event loop.
     def gateway_ssl(self) -> ssl.SSLContext:
@@ -333,7 +351,17 @@ class Probe:
     async def execute(self) -> None:
         """Run every check in order, into the report begin() started."""
         rep = self._report
+        self.run_id, self.state = new_id(), {}
+        scratch = None
+        if self.cfg.write_suites() and any(c.suite != CONNECTIVITY for c in self.checks):
+            from . import scratch
         try:
+            if scratch:
+                # Leftovers of a run that was interrupted. A failure here shows up in the checks.
+                try:
+                    await scratch.sweep(self)
+                except Exception:
+                    log.exception("cleaning up the scratch namespace")
             for c in self.checks:
                 start = time.monotonic()
                 out = await self._safe_run(c)
@@ -349,6 +377,11 @@ class Probe:
                 else:
                     rep.skipped += 1
         finally:
+            if scratch:
+                try:
+                    await scratch.sweep(self)
+                except Exception:
+                    log.exception("cleaning up the scratch namespace")
             rep.running = False
             rep.finished_at = datetime.now(UTC)
             rep.duration_ms = int((rep.finished_at - rep.started_at).total_seconds() * 1000)

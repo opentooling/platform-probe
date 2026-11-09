@@ -34,7 +34,8 @@ target-version = "py313"
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "ASYNC", "BLE", "RUF"]
 # E501: the formatter keeps code within line-length; long messages stay on one line to stay greppable.
 # ASYNC230: the only files read are small mounted Secrets.
-ignore = ["E501", "ASYNC230", "RUF001"]  # RUF001: "×" and "→" in details are meant
+# ASYNC109: wait_for and run_task poll the API and take their deadline as a plain number.
+ignore = ["E501", "ASYNC230", "ASYNC109", "RUF001"]  # RUF001: "×" and "→" in details are meant
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,7 +1,8 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const GROUPS = ["Platform", "API gateway", "Service mesh"];
+// Groups in the order the checks run, from /api/config: only enabled suites are listed.
+let GROUPS = [];
 const LABEL = { pass: "Pass", fail: "Fail", skip: "Skip", pending: "–", running: "…" };
 let checks = [];
 let experiments = [];
@@ -120,6 +121,7 @@ async function runExperiment() {
 async function init() {
   const cfg = await api("api/config");
   checks = cfg.checks;
+  GROUPS = [...new Set(checks.map((c) => c.group))];
   $("target").textContent = `gateway ${cfg.gateway.namespace}/${cfg.gateway.name} · ${cfg.gateway.host} · namespace ${cfg.namespace}`;
   $("t-v1").textContent = `${100 - cfg.split.mesh}%`;
   $("t-v2").textContent = `${cfg.split.mesh}% · x-version`;

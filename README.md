@@ -4,9 +4,10 @@ Tests the features an OpenShift platform promises its tenants, end to end, and s
 ones work. It checks the platform the way a team using it would: real traffic, real objects,
 each feature reported as passed, failed or skipped, with a hint when it fails.
 
-The first suite covers a **Red Hat Connectivity Link** API gateway and an **OpenShift Service
-Mesh 3**. More suites (Routes, storage, builds, observability…) are meant to follow; see
-[Adding checks](#adding-checks).
+The **connectivity** suite, always on, covers a **Red Hat Connectivity Link** API gateway and an
+**OpenShift Service Mesh 3**. Three **platform suites**, each switched on in the values, cover
+what else a team relies on: **ingress & certificates**, **workload security** and **storage**.
+See [Platform suites](#platform-suites), and [Adding checks](#adding-checks) for more.
 
 platform-probe started as [opentooling/rhcl-probe](https://github.com/opentooling/rhcl-probe),
 ported from Go to Python. The checks, config, console and chart values are the same; the
@@ -30,6 +31,14 @@ Gateway ──► frontend ──► catalog v1 (90%) ──► pricing
 | Platform | Kuadrant ready · Gateway programmed · probe routes accepted · AuthPolicies and RateLimitPolicies enforced · sidecars injected |
 | API gateway | TLS certificate (issuer, expiry) · HTTP→HTTPS redirect · host and path routing · default deny · API keys (missing, wrong, valid) · OIDC token (valid, tampered) · claim-based authorization (only `admin` may POST) · gateway → app mTLS · header match · weighted split · URL rewrite and header filters · request mirroring · route timeout · route rate limit · per-caller limits by plan |
 | Service mesh | SPIFFE identity on every hop · request ID propagation · STRICT mTLS rejects plaintext · AuthorizationPolicy · east-west weighted split and header routing · retries · fault injection (abort, delay) · per-hop timeout · outlier detection · egress `REGISTRY_ONLY` · NetworkPolicy blocks gateway bypass |
+
+Platform suites, when switched on ([details](#platform-suites)):
+
+| Group | Checks |
+|---|---|
+| Ingress & certificates | default IngressController available · edge Route with a trusted certificate that isn't about to expire, HTTP redirected to HTTPS · reencrypt Route to a service-CA certificate · passthrough Route ends TLS at the pod · cert-manager issues a certificate |
+| Workload security | a tenant pod gets the expected SCC and a UID from the namespace's range · privileged, root, hostPath and hostNetwork pods refused · ResourceQuota refuses a pod over quota · LimitRange sets default requests and limits |
+| Storage | exactly one default StorageClass · for each StorageClass: a PVC binds and data written by one pod is read by another · expansion · snapshot restored to a new PVC with the data |
 
 A feature you switch off in the values (OIDC, NetworkPolicies, the platform's default deny…) is
 reported as **skipped**, not failed.
@@ -93,9 +102,58 @@ The values you are most likely to set:
 | `mesh.strictMTLS`, `.authorizationPolicies`, `.trafficManagement` | `true` | Mesh features to set up and check |
 | `mesh.egress.registryOnly` | `true` | Limit the console to the mesh registry |
 | `networkPolicies.enabled` | `true` | Ingress NetworkPolicies for the demo app |
+| `suites.ingress`, `.workloads`, `.storage` | off | [Platform suites](#platform-suites) to run |
+| `scratch.namespace`, `scratch.create` | `<namespace>-scratch`, `true` | Where the platform suites create their test objects |
 | `extraObjects` | `[]` | Extra manifests, see below |
 
 See [values.yaml](charts/platform-probe/values.yaml) for all of them.
+
+## Platform suites
+
+```yaml
+suites:
+  ingress:
+    enabled: true
+    certManager:
+      issuer: { name: internal-ca, kind: ClusterIssuer }   # optional
+  workloads:
+    enabled: true
+  storage:
+    enabled: true
+    storageClasses: [gp3-csi, ocs-storagecluster-cephfs]  # empty = the default class
+    snapshotClass: csi-aws-vsc                            # optional
+```
+
+They test from a tenant's side, so they need to create things: pods, a Service and Routes,
+PVCs and snapshots, a cert-manager Certificate. All of it goes into a **scratch namespace**,
+`<release namespace>-scratch` by default, where the console gets a Role and nothing more
+(cluster-wide it can only read IngressControllers and StorageClasses). Everything a run creates
+is labelled with the release and the run, and deleted when the run ends; the next run also
+deletes anything an interrupted one left. The one exception is the cert-manager check's
+Secret, `<release>-probe-certificate`, which is kept and reissued on every run.
+
+The chart creates the scratch namespace. To test what your teams actually get, make it
+yourself with `oc new-project`, so your project template applies (ResourceQuota, LimitRange,
+default NetworkPolicies), and set `scratch.create: false`:
+
+```bash
+oc new-project platform-probe-scratch
+```
+
+Test pods run the probe's own image, as an arbitrary UID under `restricted-v2`, and report back
+through their termination message. With a private registry, put the pull secrets listed in
+`imagePullSecrets` in the scratch namespace too. With your own `trustedCA.configMap`, copy that
+ConfigMap there as well: the ingress checks trust the router's certificate through it.
+
+Rejections (privileged pods, a pod over quota) are tested with server-side dry runs, so
+admission runs in full and nothing is created.
+
+The storage checks run pods one after another and wait for volumes to attach, which takes
+minutes. Give `helm test` the time:
+
+```bash
+helm test probe -n platform-probe --logs --timeout 20m
+```
 
 ### Example: the RHCL platform with Keycloak and Vault
 
@@ -187,20 +245,30 @@ is skipped.
 A check is an async function that takes the `Probe` and returns `passed(...)`, `failed(detail,
 hint)` or `skipped(...)`. It registers itself with `@check`, and runs in the order it is
 defined. A suite is a module in [platform_probe/checks/](platform_probe/checks/), imported
-there in run order:
+there in run order; its checks name the suite, and run only when `suites.<name>.enabled` is on:
 
 ```python
-@check("ingress-route-admitted", GROUP_INGRESS, "Route admitted by the default IngressController")
-async def check_route_admitted(p: Probe) -> Outcome:
-    if not p.cfg.expect.routes:
-        return skipped("expect.routes is off")
+@check("workloads-uid", GROUP_WORKLOADS, "Tenant pods get the expected SCC and an arbitrary UID", "workloads")
+async def check_uid(p: Probe) -> Outcome:
+    run = await scratch.run_task(p, "whoami", "whoami")
+    if not run.ok:
+        return failed(f"pod: {run.explain()}")
     ...
-    return passed("route/probe admitted by default")
+    return passed(f"UID {run.data['uid']}")
 ```
 
-Anything a check reads from the cluster needs a rule in the console's
-[RBAC](charts/platform-probe/templates/rbac.yaml); anything it expects needs a value that
-switches it off, so a platform without the feature reports **skipped**, not failed.
+For a check that needs to see something from inside a tenant pod, add a task to
+[tasks.py](platform_probe/tasks.py) and run it with `scratch.run_task`; objects it creates go
+into the scratch namespace with `scratch.meta(p, name)`, so the sweep deletes them. The checks
+are tested against an in-memory API server, [tests/fakekube.py](tests/fakekube.py), which runs
+the tasks in-process.
+
+A new suite also needs its switch in [config.py](platform_probe/config.py), the chart's
+values and [config.yaml](charts/platform-probe/templates/config.yaml), and the API rules it
+uses in [rbac.yaml](charts/platform-probe/templates/rbac.yaml) (cluster-wide reads) or
+[scratch.yaml](charts/platform-probe/templates/scratch.yaml) (the scratch namespace). Anything a
+check expects needs a value that switches it off, so a platform without the feature reports
+**skipped**, not failed.
 
 ## Development
 

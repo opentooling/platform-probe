@@ -21,3 +21,18 @@ mesh:
     allowedUrl: https://api.github.com/
 trustedCA:
   configMap: my-ca
+imagePullSecrets:
+  - name: ghcr-pull
+suites:
+  ingress:
+    enabled: true
+    certManager:
+      issuer:
+        name: internal-ca
+  workloads:
+    enabled: true
+    expectQuota: true
+  storage:
+    enabled: true
+    storageClasses: [gp3-csi, ocs-storagecluster-cephfs]
+    snapshotClass: csi-aws-vsc

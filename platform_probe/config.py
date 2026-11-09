@@ -136,6 +136,62 @@ class OIDC:
 
 
 @dataclass
+class Scratch:
+    """The namespace where the platform suites create and delete their test objects."""
+
+    namespace: str = ""
+    # ConfigMap in the scratch namespace with the CA bundle the test pods trust, and its key.
+    ca_config_map: str = ""
+    ca_key: str = "ca-bundle.crt"
+    # Pull secrets in the scratch namespace for the probe's image.
+    image_pull_secrets: list[str] = field(default_factory=list)
+
+
+@dataclass
+class IssuerRef:
+    name: str = ""
+    kind: str = "ClusterIssuer"
+
+
+@dataclass
+class IngressSuite:
+    enabled: bool = False
+    # Fail when the router's certificate expires within this many days.
+    cert_expiry_days: int = 14
+    # A cert-manager issuer to test, or empty to skip the cert-manager check.
+    cert_manager_issuer: IssuerRef = field(default_factory=IssuerRef)
+
+
+@dataclass
+class WorkloadsSuite:
+    enabled: bool = False
+    # The SCC a tenant pod is expected to get.
+    expected_scc: str = "restricted-v2"
+    # Fail, rather than skip, when the scratch namespace has no ResourceQuota / LimitRange.
+    expect_quota: bool = False
+    expect_limit_range: bool = False
+
+
+@dataclass
+class StorageSuite:
+    enabled: bool = False
+    # StorageClasses to test; empty = the default one.
+    storage_classes: list[str] = field(default_factory=list)
+    # VolumeSnapshotClass for the snapshot check; empty = skip it.
+    snapshot_class: str = ""
+    size: str = "1Gi"
+    # How long a pod may take to schedule, attach and run.
+    pod_timeout: float = _duration()
+
+
+@dataclass
+class Suites:
+    ingress: IngressSuite = field(default_factory=IngressSuite)
+    workloads: WorkloadsSuite = field(default_factory=WorkloadsSuite)
+    storage: StorageSuite = field(default_factory=StorageSuite)
+
+
+@dataclass
 class Config:
     release: str = ""
     namespace: str = ""
@@ -153,6 +209,15 @@ class Config:
     oidc: OIDC = field(default_factory=OIDC)
     # CA bundle (PEM) trusted in addition to the system roots, for the gateway and the IdP.
     ca_file: str = ""
+    # The probe's own image, which the platform suites' test pods run.
+    image: str = ""
+    scratch: Scratch = field(default_factory=Scratch)
+    suites: Suites = field(default_factory=Suites)
+
+    def write_suites(self) -> bool:
+        """Whether any suite that creates objects in the scratch namespace is on."""
+        s = self.suites
+        return s.ingress.enabled or s.workloads.enabled or s.storage.enabled
 
     def apply_defaults(self) -> Config:
         if not self.trust_domain:
@@ -170,6 +235,10 @@ class Config:
             self.api_keys.prefix = "APIKEY"
         if not self.routes.timeout:
             self.routes.timeout = 2.0
+        if not self.scratch.namespace and self.namespace:
+            self.scratch.namespace = self.namespace + "-scratch"
+        if not self.suites.storage.pod_timeout:
+            self.suites.storage.pod_timeout = 180.0
         return self
 
     def principal(self, namespace: str, sa: str) -> str:
@@ -223,6 +292,10 @@ def _decode(cls, data, where: str):
         elif typ is int:
             if isinstance(value, bool) or not isinstance(value, int):
                 raise ConfigError(f"{path}: expected an integer")
+        elif typ == list[str]:
+            if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+                raise ConfigError(f"{path}: expected a list of strings")
+            value = list(value)
         elif typ is str and not isinstance(value, str):
             raise ConfigError(f"{path}: expected a string")
         setattr(obj, f.name, value)

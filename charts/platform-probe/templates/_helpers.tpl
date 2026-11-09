@@ -86,6 +86,16 @@ platform-probe/role: {{ .role }}
 {{- end }}
 {{- end }}
 
+{{/* The scratch namespace, where the platform suites create their test objects. */}}
+{{- define "platform-probe.scratchNamespace" -}}
+{{- default (printf "%s-scratch" .Release.Namespace) .Values.scratch.namespace | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/* Whether any suite that creates objects in the scratch namespace is on. */}}
+{{- define "platform-probe.writeSuites" -}}
+{{- if or .Values.suites.ingress.enabled .Values.suites.workloads.enabled .Values.suites.storage.enabled }}true{{ end }}
+{{- end }}
+
 {{/* Labels for sidecar injection. Pass a dict: ctx, mesh (bool). */}}
 {{- define "platform-probe.meshLabels" -}}
 {{- if not .mesh }}

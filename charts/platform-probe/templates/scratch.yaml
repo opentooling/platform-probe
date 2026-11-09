@@ -1,0 +1,87 @@
+{{- if include "platform-probe.writeSuites" . }}
+{{- $fn := include "platform-probe.fullname" . }}
+{{- $ns := include "platform-probe.scratchNamespace" . }}
+{{- /*
+The scratch namespace: where the platform suites (suites.ingress, .workloads, .storage) create
+their test objects. The console may create and delete there, and nowhere else.
+*/}}
+{{- if .Values.scratch.create }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $ns }}
+  labels:
+    {{- include "platform-probe.labels" . | nindent 4 }}
+---
+{{- end }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fn }}-scratch
+  namespace: {{ $ns }}
+  labels:
+    {{- include "platform-probe.labels" . | nindent 4 }}
+rules:
+  # Test pods (task pods, the ingress backend) and the dry runs of pods admission must refuse.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "list", "delete"]
+  {{- if .Values.suites.ingress.enabled }}
+  # The ingress backend's Service and the Routes to it.
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["create", "get", "list", "delete"]
+  - apiGroups: ["route.openshift.io"]
+    resources: ["routes"]
+    verbs: ["create", "get", "list", "delete"]
+  {{- if .Values.suites.ingress.certManager.issuer.name }}
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificates"]
+    verbs: ["create", "get", "list", "delete"]
+  {{- end }}
+  {{- end }}
+  {{- if .Values.suites.workloads.enabled }}
+  - apiGroups: [""]
+    resources: ["resourcequotas", "limitranges"]
+    verbs: ["list"]
+  {{- end }}
+  {{- if .Values.suites.storage.enabled }}
+  # PVCs, patched to test expansion, and snapshots of them.
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["create", "get", "list", "patch", "delete"]
+  {{- if .Values.suites.storage.snapshotClass }}
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshots"]
+    verbs: ["create", "get", "list", "delete"]
+  {{- end }}
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fn }}-scratch
+  namespace: {{ $ns }}
+  labels:
+    {{- include "platform-probe.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $fn }}-scratch
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "platform-probe.sa" (dict "ctx" . "role" "console") }}
+    namespace: {{ .Release.Namespace }}
+{{- if and .Values.trustedCA.openshiftInjected (not .Values.trustedCA.configMap) }}
+---
+# The cluster trust bundle for the test pods, which check the router's certificate with it.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fn }}-ca-bundle
+  namespace: {{ $ns }}
+  labels:
+    {{- include "platform-probe.labels" . | nindent 4 }}
+    config.openshift.io/inject-trusted-cabundle: "true"
+{{- end }}
+{{- end }}

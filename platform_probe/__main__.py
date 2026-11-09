@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import logging
 import os
@@ -51,9 +52,35 @@ def serve() -> int:
     from aiohttp import web
 
     port = int(os.environ.get("PORT") or "8080")
+    cert, key = os.environ.get("TLS_CERT_FILE"), os.environ.get("TLS_KEY_FILE")
+    if cert and key:
+        # The ingress suite's backend: HTTP and HTTPS, for edge, reencrypt and passthrough Routes.
+        tls_port = int(os.environ.get("TLS_PORT") or "8443")
+        log.info("platform-probe %s: %s listening on :%d and TLS :%d", __version__, role, port, tls_port)
+        asyncio.run(serve_tls(app, port, tls_port, cert, key))
+        return 0
     log.info("platform-probe %s: %s listening on :%d", __version__, role, port)
     web.run_app(app, port=port, print=None, access_log=None, shutdown_timeout=5, handle_signals=True)
     return 0
+
+
+async def serve_tls(app, port: int, tls_port: int, cert: str, key: str) -> None:
+    import signal
+    import ssl
+
+    from aiohttp import web
+
+    ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+    ctx.load_cert_chain(cert, key)
+    runner = web.AppRunner(app, access_log=None)
+    await runner.setup()
+    await web.TCPSite(runner, port=port).start()
+    await web.TCPSite(runner, port=tls_port, ssl_context=ctx).start()
+    stop = asyncio.Event()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        asyncio.get_running_loop().add_signal_handler(sig, stop.set)
+    await stop.wait()
+    await runner.cleanup()
 
 
 LABEL = {"pass": "PASS", "fail": "FAIL", "skip": "SKIP"}
@@ -107,6 +134,10 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     if argv[:1] == ["check"]:
         return check(argv[1:])
+    if argv[:1] == ["task"]:
+        from .tasks import main as task
+
+        return task(argv[1:])
     if argv[:1] in (["version"], ["--version"]):
         print(__version__)
         return 0

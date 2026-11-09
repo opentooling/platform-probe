@@ -150,6 +150,50 @@ mesh:
 networkPolicies:
   enabled: true
 
+# Platform suites: what a team gets from the platform, beyond the gateway and the mesh. Each is
+# off by default and, when on, adds its checks to the console and to `helm test`. They create
+# test objects (pods, Routes, PVCs...) in the scratch namespace, labelled with the run, and
+# delete them when the run ends.
+scratch:
+  # Where the test objects go. Empty = <release namespace>-scratch.
+  namespace: ""
+  # Create the namespace with the chart. Turn off to bring your own, made with
+  # `oc new-project`: it then gets your project template (ResourceQuota, LimitRange,
+  # NetworkPolicies) the way a tenant's namespace does, and the workload checks test those.
+  # Either way the console gets a Role there, and nothing outside it.
+  create: true
+
+suites:
+  # Routes (edge, reencrypt, passthrough) reached from a pod in the scratch namespace, the
+  # router's certificate, and optionally cert-manager.
+  ingress:
+    enabled: false
+    # Fail when the router's certificate expires within this many days.
+    certExpiryDays: 14
+    certManager:
+      # An issuer to request a test certificate from. Empty = skip the cert-manager check.
+      issuer:
+        name: ""
+        kind: ClusterIssuer
+  # SCC and Pod Security: the UID and SCC a tenant pod gets, and that privileged, root,
+  # hostPath and hostNetwork pods are refused (server-side dry runs: nothing is created).
+  workloads:
+    enabled: false
+    expectedScc: restricted-v2
+    # Fail, rather than skip, when the scratch namespace has no ResourceQuota / LimitRange.
+    expectQuota: false
+    expectLimitRange: false
+  # PVCs: provisioning, data kept between pods, expansion, snapshot and restore.
+  storage:
+    enabled: false
+    # StorageClasses to test. Empty = the default one.
+    storageClasses: []
+    # VolumeSnapshotClass for the snapshot check. Empty = skip it.
+    snapshotClass: ""
+    size: 1Gi
+    # How long a test pod may take to schedule, attach its volume and finish.
+    podTimeout: 3m
+
 # Python services use about 30Mi each, the console about 35Mi.
 resources:
   requests:

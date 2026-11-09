@@ -3,6 +3,8 @@
 {{- $sa := dict "ctx" . }}
 {{- $v := .Values }}
 {{- /* Everything the console needs to know, from these values only. Read by platform_probe/config.py, which rejects keys it does not know. */}}
+{{- $pullSecrets := list }}
+{{- range .Values.imagePullSecrets }}{{ $pullSecrets = append $pullSecrets .name }}{{ end }}
 {{- $config := dict
   "release" .Release.Name
   "namespace" .Release.Namespace
@@ -54,6 +56,28 @@
     "scope" $v.auth.oidc.scope
     "clientSecretFile" "/etc/platform-probe/oidc/client-secret")
   "caFile" (ternary "/etc/platform-probe/ca/ca-bundle.crt" "" (ne (include "platform-probe.caConfigMap" .) ""))
+  "image" (include "platform-probe.image" .)
+  "scratch" (dict
+    "namespace" (include "platform-probe.scratchNamespace" .)
+    "caConfigMap" (include "platform-probe.caConfigMap" .)
+    "caKey" (ternary $v.trustedCA.key "ca-bundle.crt" (ne $v.trustedCA.configMap ""))
+    "imagePullSecrets" $pullSecrets)
+  "suites" (dict
+    "ingress" (dict
+      "enabled" $v.suites.ingress.enabled
+      "certExpiryDays" (int $v.suites.ingress.certExpiryDays)
+      "certManagerIssuer" (dict "name" $v.suites.ingress.certManager.issuer.name "kind" $v.suites.ingress.certManager.issuer.kind))
+    "workloads" (dict
+      "enabled" $v.suites.workloads.enabled
+      "expectedScc" $v.suites.workloads.expectedScc
+      "expectQuota" $v.suites.workloads.expectQuota
+      "expectLimitRange" $v.suites.workloads.expectLimitRange)
+    "storage" (dict
+      "enabled" $v.suites.storage.enabled
+      "storageClasses" $v.suites.storage.storageClasses
+      "snapshotClass" $v.suites.storage.snapshotClass
+      "size" $v.suites.storage.size
+      "podTimeout" $v.suites.storage.podTimeout))
 }}
 apiVersion: v1
 kind: ConfigMap

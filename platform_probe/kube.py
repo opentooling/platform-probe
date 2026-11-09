@@ -1,6 +1,6 @@
-"""A minimal read-only Kubernetes client: GET a path with the pod's own ServiceAccount token,
-decode the JSON. The probe only reads object status, so it needs nothing more than that, and
-no client library."""
+"""A minimal Kubernetes client: a request to an API path with the pod's own ServiceAccount
+token, JSON in and out. The connectivity suite only reads status; the platform suites also
+create and delete objects in the scratch namespace. No client library needed."""
 
 from __future__ import annotations
 
@@ -57,26 +57,53 @@ class Kube:
             )
         return self._session
 
-    async def get(self, path: str) -> dict:
-        """Fetch an API path such as /apis/gateway.networking.k8s.io/v1/namespaces/x/gateways/y."""
+    async def request(
+        self, method: str, path: str, body: dict | None = None, content_type: str = "application/json"
+    ) -> dict:
+        """Send a request to an API path such as /api/v1/namespaces/x/pods and return the decoded
+        answer. Raises StatusError for any answer outside 2xx."""
         if self.base is None:
             raise KubeError("no Kubernetes API access")
         # Re-read every time: projected tokens rotate.
         with open(self.token_file, encoding="utf-8") as f:
             token = f.read().strip()
         headers = {"Authorization": "Bearer " + token, "Accept": "application/json"}
-        async with self._client().get(self.base + path, headers=headers) as resp:
-            body = await read_body(resp, 8 << 20)
+        data = None
+        if body is not None:
+            headers["Content-Type"] = content_type
+            data = json.dumps(body).encode()
+        async with self._client().request(method, self.base + path, headers=headers, data=data) as resp:
+            raw = await read_body(resp, 8 << 20)
             try:
-                obj = json.loads(body)
+                obj = json.loads(raw)
             except ValueError:
                 obj = None
-            if resp.status != 200:
+            if not 200 <= resp.status < 300:
                 message = obj.get("message", "") if isinstance(obj, dict) else ""
                 raise StatusError(resp.status, message)
             if not isinstance(obj, dict):
-                raise KubeError(f"{path}: not a JSON object ({len(body)} bytes)")
+                raise KubeError(f"{path}: not a JSON object ({len(raw)} bytes)")
             return obj
+
+    async def get(self, path: str) -> dict:
+        """Fetch an API path such as /apis/gateway.networking.k8s.io/v1/namespaces/x/gateways/y."""
+        return await self.request("GET", path)
+
+    async def create(self, path: str, obj: dict, dry_run: bool = False) -> dict:
+        """POST an object to a collection path. With dry_run, admission runs and nothing is stored."""
+        return await self.request("POST", path + ("?dryRun=All" if dry_run else ""), obj)
+
+    async def patch(self, path: str, patch: dict) -> dict:
+        """A JSON merge patch."""
+        return await self.request("PATCH", path, patch, "application/merge-patch+json")
+
+    async def delete(self, path: str) -> None:
+        """Delete an object or, with ?labelSelector=..., a collection. Already gone is fine."""
+        try:
+            await self.request("DELETE", path)
+        except StatusError as e:
+            if e.code != 404:
+                raise
 
     async def close(self) -> None:
         if self._session is not None:
