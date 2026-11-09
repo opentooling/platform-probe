@@ -103,7 +103,115 @@ def whoami() -> dict:
     return {"uid": os.getuid(), "gid": os.getgid(), "groups": os.getgroups()}
 
 
-TASKS = {"fetch": fetch, "write": write, "read": read, "whoami": whoami}
+MARKER = "platform-probe marker run="
+METRIC = "platform_probe_marker"
+
+
+def _metrics_handler(run: str):
+    from http.server import BaseHTTPRequestHandler
+
+    body = f'# TYPE {METRIC} gauge\n{METRIC}{{run="{run}"}} 1\n'.encode()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200 if self.path.split("?")[0] in ("/metrics", "/") else 404)
+            self.send_header("Content-Type", "text/plain; version=0.0.4")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    return Handler
+
+
+def emit(run: str, seconds: float = 600, metrics_port: int = 9090, interval: float = 5) -> dict:
+    """Print the run's marker line every few seconds and serve it as a metric, for the log
+    collector to ship and the metrics collector to scrape, until stopped or seconds pass."""
+    import threading
+    import time
+    from http.server import ThreadingHTTPServer
+
+    server = ThreadingHTTPServer(("", metrics_port), _metrics_handler(run))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    lines, end = 0, time.monotonic() + seconds
+    while time.monotonic() < end:
+        print(MARKER + run, flush=True)
+        lines += 1
+        time.sleep(interval)
+    server.shutdown()
+    return {"lines": lines}
+
+
+def _attr(key: str, value: str) -> dict:
+    return {"key": key, "value": {"stringValue": value}}
+
+
+def _otlp_post(endpoint: str, signal: str, payload: dict, timeout: float) -> dict:
+    import urllib.error
+    import urllib.request
+
+    url = endpoint.rstrip("/") + f"/v1/{signal}"
+    req = urllib.request.Request(
+        url, data=json.dumps(payload).encode(), method="POST", headers={"Content-Type": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return {"url": url, "status": resp.status}
+    except urllib.error.HTTPError as e:
+        return {"url": url, "status": e.code, "error": f"{e.code} {e.read(300).decode('utf-8', 'replace')}"}
+    except OSError as e:
+        return {"url": url, "error": f"{type(e).__name__}: {e}"}
+
+
+def otlp(
+    endpoint: str,
+    run: str,
+    trace_id: str = "",
+    metric: bool = False,
+    namespace: str = "",
+    pod: str = "",
+    timeout: float = 10,
+) -> dict:
+    """Send a span with the given trace ID and/or the marker metric to an OTLP/HTTP endpoint
+    (JSON encoding), as an instrumented app in a tenant namespace would."""
+    import secrets
+    import time
+
+    now = time.time_ns()
+    resource = {
+        "attributes": [
+            _attr("service.name", "platform-probe"),
+            _attr("k8s.namespace.name", namespace),
+            _attr("k8s.pod.name", pod or os.environ.get("HOSTNAME", "")),
+        ]
+    }
+    scope = {"name": "platform-probe"}
+    out: dict = {}
+    if trace_id:
+        span = {
+            "traceId": trace_id,
+            "spanId": secrets.token_hex(8),
+            "name": "platform-probe marker",
+            "kind": 1,
+            "startTimeUnixNano": str(now - 1_000_000),
+            "endTimeUnixNano": str(now),
+            "attributes": [_attr("platform_probe.run", run)],
+        }
+        payload = {"resourceSpans": [{"resource": resource, "scopeSpans": [{"scope": scope, "spans": [span]}]}]}
+        out["traces"] = _otlp_post(endpoint, "traces", payload, timeout)
+    if metric:
+        point = {"asInt": "1", "timeUnixNano": str(now), "attributes": [_attr("run", run)]}
+        m = {"name": METRIC, "gauge": {"dataPoints": [point]}}
+        payload = {"resourceMetrics": [{"resource": resource, "scopeMetrics": [{"scope": scope, "metrics": [m]}]}]}
+        out["metrics"] = _otlp_post(endpoint, "metrics", payload, timeout)
+    errors = [f"{k}: {v['error']}" for k, v in out.items() if v.get("error")]
+    if errors:
+        out["error"] = "; ".join(errors)
+    return out
+
+
+TASKS = {"fetch": fetch, "write": write, "read": read, "whoami": whoami, "emit": emit, "otlp": otlp}
 
 
 def main(argv: list[str]) -> int:

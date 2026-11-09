@@ -146,6 +146,11 @@ spec:
               mountPath: /etc/platform-probe/oidc
               readOnly: true
             {{- end }}
+            {{- if $.Values.suites.observability.enabled }}
+            - name: grafana
+              mountPath: /etc/platform-probe/grafana
+              readOnly: true
+            {{- end }}
           {{- end }}
       {{- if eq $c.role "console" }}
       volumes:
@@ -171,6 +176,14 @@ spec:
             items:
               - key: {{ $.Values.auth.oidc.clientSecret.key }}
                 path: client-secret
+        {{- end }}
+        {{- if $.Values.suites.observability.enabled }}
+        - name: grafana
+          secret:
+            secretName: {{ $.Values.suites.observability.grafana.token.existingSecret }}
+            items:
+              - key: {{ $.Values.suites.observability.grafana.token.key }}
+                path: token
         {{- end }}
       {{- end }}
       {{- with $.Values.nodeSelector }}

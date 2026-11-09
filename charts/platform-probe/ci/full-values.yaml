@@ -36,3 +36,14 @@ suites:
     enabled: true
     storageClasses: [gp3-csi, ocs-storagecluster-cephfs]
     snapshotClass: csi-aws-vsc
+  observability:
+    enabled: true
+    grafana:
+      url: https://grafana.observability.example.com
+      token:
+        existingSecret: grafana-probe-token
+      datasources: { loki: loki, mimir: mimir, tempo: tempo }
+    labels:
+      extra: { cluster: prod-eu-1 }
+    otlp:
+      endpoint: http://alloy.alloy.svc:4318

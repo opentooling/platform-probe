@@ -78,7 +78,18 @@
       "storageClasses" $v.suites.storage.storageClasses
       "snapshotClass" $v.suites.storage.snapshotClass
       "size" $v.suites.storage.size
-      "podTimeout" $v.suites.storage.podTimeout))
+      "podTimeout" $v.suites.storage.podTimeout)
+    "observability" (dict
+      "enabled" $v.suites.observability.enabled
+      "grafanaUrl" $v.suites.observability.grafana.url
+      "tokenFile" "/etc/platform-probe/grafana/token"
+      "datasources" $v.suites.observability.grafana.datasources
+      "labels" $v.suites.observability.labels
+      "metricsMethod" $v.suites.observability.metrics.method
+      "metricsPort" (int $v.suites.observability.metrics.port)
+      "podAnnotations" $v.suites.observability.metrics.podAnnotations
+      "otlpEndpoint" $v.suites.observability.otlp.endpoint
+      "timeout" $v.suites.observability.timeout))
 }}
 apiVersion: v1
 kind: ConfigMap

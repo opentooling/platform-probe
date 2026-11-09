@@ -6,7 +6,8 @@ each feature reported as passed, failed or skipped, with a hint when it fails.
 
 The **connectivity** suite, always on, covers a **Red Hat Connectivity Link** API gateway and an
 **OpenShift Service Mesh 3**. Three **platform suites**, each switched on in the values, cover
-what else a team relies on: **ingress & certificates**, **workload security** and **storage**.
+what else a team relies on: **ingress & certificates**, **workload security**, **storage** and
+**observability** (telemetry reaching a central Grafana, Loki, Mimir and Tempo stack).
 See [Platform suites](#platform-suites), and [Adding checks](#adding-checks) for more.
 
 platform-probe started as [opentooling/rhcl-probe](https://github.com/opentooling/rhcl-probe),
@@ -39,6 +40,7 @@ Platform suites, when switched on ([details](#platform-suites)):
 | Ingress & certificates | default IngressController available · edge Route with a trusted certificate that isn't about to expire, HTTP redirected to HTTPS · reencrypt Route to a service-CA certificate · passthrough Route ends TLS at the pod · cert-manager issues a certificate |
 | Workload security | a tenant pod gets the expected SCC and a UID from the namespace's range · privileged, root, hostPath and hostNetwork pods refused · ResourceQuota refuses a pod over quota · LimitRange sets default requests and limits |
 | Storage | exactly one default StorageClass · for each StorageClass: a PVC binds and data written by one pod is read by another · expansion · snapshot restored to a new PVC with the data |
+| Observability | a pod's log line reaches Loki · its metric reaches Mimir (scraped or pushed over OTLP) · its span reaches Tempo; each with the time it took |
 
 A feature you switch off in the values (OIDC, NetworkPolicies, the platform's default deny…) is
 reported as **skipped**, not failed.
@@ -102,7 +104,7 @@ The values you are most likely to set:
 | `mesh.strictMTLS`, `.authorizationPolicies`, `.trafficManagement` | `true` | Mesh features to set up and check |
 | `mesh.egress.registryOnly` | `true` | Limit the console to the mesh registry |
 | `networkPolicies.enabled` | `true` | Ingress NetworkPolicies for the demo app |
-| `suites.ingress`, `.workloads`, `.storage` | off | [Platform suites](#platform-suites) to run |
+| `suites.ingress`, `.workloads`, `.storage`, `.observability` | off | [Platform suites](#platform-suites) to run |
 | `scratch.namespace`, `scratch.create` | `<namespace>-scratch`, `true` | Where the platform suites create their test objects |
 | `extraObjects` | `[]` | Extra manifests, see below |
 
@@ -123,6 +125,28 @@ suites:
     storageClasses: [gp3-csi, ocs-storagecluster-cephfs]  # empty = the default class
     snapshotClass: csi-aws-vsc                            # optional
 ```
+
+```yaml
+suites:
+  observability:
+    enabled: true
+    grafana:
+      url: https://grafana.observability.example.com
+      token: { existingSecret: grafana-probe-token }      # a Viewer service account token
+      datasources: { loki: <uid>, mimir: <uid>, tempo: <uid> }
+    labels:
+      extra: { cluster: prod-eu-1 }                       # picks this cluster in the queries
+    otlp:
+      endpoint: http://alloy.alloy.svc:4318               # for traces
+```
+
+The observability suite checks the pipeline from a team's side: a pod in the scratch namespace
+logs a marker line, serves (or pushes over OTLP) a marker metric and sends a span, all tagged
+with the run ID. The console then asks Grafana's data source proxy until each one shows up in
+Loki, Mimir and Tempo, and reports how long it took. The label names are configurable
+(`labels.namespace`, `labels.pod`), as are the pod annotations a scraping collector discovers
+(`metrics.podAnnotations`). With a multi-tenant stack, each data source sends this cluster's
+tenant ID, so the probe needs none. A failure names the query it ran, to paste into Explore.
 
 They test from a tenant's side, so they need to create things: pods, Routes, PVCs and
 snapshots, a cert-manager Certificate. (The Service the Routes point at comes with the chart:

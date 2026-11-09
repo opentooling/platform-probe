@@ -9,6 +9,7 @@ termination message, as the kubelet would make it. Hooks let a test decide admis
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 import shutil
@@ -29,6 +30,7 @@ class FakeKube:
         self.pod_status = None  # a pod's status instead of running its task, e.g. stuck Pending
         self.route_admitted = True
         self.calls: list[tuple[str, str]] = []
+        self.emitted: list[dict] = []
 
     # --- storage ---
 
@@ -80,7 +82,8 @@ class FakeKube:
         obj = self.objects.get(coll, {}).get(name)
         if obj is None:
             raise StatusError(404, f"{name} not found")
-        self._progress(coll, obj)
+        # In a thread: a task may call a test server running on this event loop.
+        await asyncio.to_thread(self._progress, coll, obj)
         return copy.deepcopy(obj)
 
     async def create(self, path: str, obj: dict, dry_run: bool = False) -> dict:
@@ -163,6 +166,10 @@ class FakeKube:
         for m in c.get("volumeMounts", []):
             if m["name"] in claims and "path" in args and args["path"].startswith(m["mountPath"]):
                 args["path"] = str(self.volume_dir(claims[m["name"]])) + args["path"][len(m["mountPath"]) :]
+        if name == "emit":
+            # Long-running: it logs and serves its metric until the run deletes it.
+            self.emitted.append(args)
+            return {"phase": "Running", "conditions": [{"type": "Ready", "status": "True"}]}
         if name == "fetch":
             result = self.fetch(args["requests"])
         else:

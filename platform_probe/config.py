@@ -188,10 +188,48 @@ class StorageSuite:
 
 
 @dataclass
+class Datasources:
+    """Grafana data source UIDs. An empty one skips that signal's check."""
+
+    loki: str = ""
+    mimir: str = ""
+    tempo: str = ""
+
+
+@dataclass
+class TelemetryLabels:
+    """What the central stack calls the Kubernetes labels, and labels that pick this cluster."""
+
+    namespace: str = "namespace"
+    pod: str = "pod"
+    extra: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class ObservabilitySuite:
+    enabled: bool = False
+    grafana_url: str = ""
+    # A Grafana service account token, mounted from a Secret.
+    token_file: str = ""
+    datasources: Datasources = field(default_factory=Datasources)
+    labels: TelemetryLabels = field(default_factory=TelemetryLabels)
+    # How the marker metric reaches Mimir: "annotations" (the collector scrapes the test pod,
+    # found by pod_annotations) or "otlp" (the pod pushes it to otlp_endpoint).
+    metrics_method: str = "annotations"
+    metrics_port: int = 9090
+    pod_annotations: dict[str, str] = field(default_factory=dict)
+    # The collector's OTLP/HTTP endpoint, e.g. http://alloy.alloy.svc:4318. Empty = no traces.
+    otlp_endpoint: str = ""
+    # How long a signal may take to show up in Grafana.
+    timeout: float = _duration()
+
+
+@dataclass
 class Suites:
     ingress: IngressSuite = field(default_factory=IngressSuite)
     workloads: WorkloadsSuite = field(default_factory=WorkloadsSuite)
     storage: StorageSuite = field(default_factory=StorageSuite)
+    observability: ObservabilitySuite = field(default_factory=ObservabilitySuite)
 
 
 @dataclass
@@ -220,7 +258,7 @@ class Config:
     def write_suites(self) -> bool:
         """Whether any suite that creates objects in the scratch namespace is on."""
         s = self.suites
-        return s.ingress.enabled or s.workloads.enabled or s.storage.enabled
+        return s.ingress.enabled or s.workloads.enabled or s.storage.enabled or s.observability.enabled
 
     def apply_defaults(self) -> Config:
         if not self.trust_domain:
@@ -242,6 +280,8 @@ class Config:
             self.scratch.namespace = self.namespace + "-scratch"
         if not self.suites.storage.pod_timeout:
             self.suites.storage.pod_timeout = 180.0
+        if not self.suites.observability.timeout:
+            self.suites.observability.timeout = 180.0
         return self
 
     def principal(self, namespace: str, sa: str) -> str:
@@ -295,6 +335,10 @@ def _decode(cls, data, where: str):
         elif typ is int:
             if isinstance(value, bool) or not isinstance(value, int):
                 raise ConfigError(f"{path}: expected an integer")
+        elif typ == dict[str, str]:
+            if not isinstance(value, dict) or not all(isinstance(v, str) for v in value.values()):
+                raise ConfigError(f"{path}: expected a map of strings")
+            value = dict(value)
         elif typ == list[str]:
             if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
                 raise ConfigError(f"{path}: expected a list of strings")

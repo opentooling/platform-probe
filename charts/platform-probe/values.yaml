@@ -193,6 +193,46 @@ suites:
     size: 1Gi
     # How long a test pod may take to schedule, attach its volume and finish.
     podTimeout: 3m
+  # Telemetry from a pod in the scratch namespace reaches the central Grafana stack: a log line
+  # in Loki, a metric in Mimir, a span in Tempo, each marked with the run and found through
+  # Grafana's data source proxy. Each check reports how long its signal took.
+  observability:
+    enabled: false
+    grafana:
+      # Reachable from the console, on 443. Its host gets a mesh egress entry.
+      url: ""
+      # A Grafana service account token (Viewer is enough), in a Secret in the release namespace.
+      token:
+        existingSecret: ""
+        key: token
+      # Data source UIDs (Connections → Data sources → the UID in the URL). Empty = skip that
+      # signal. With a multi-tenant stack, the data source sends this cluster's tenant ID.
+      datasources:
+        loki: ""
+        mimir: ""
+        tempo: ""
+    # What Loki and Mimir call the pod's namespace and name, and labels added to every query to
+    # pick this cluster, e.g. {cluster: prod-eu-1}.
+    labels:
+      namespace: namespace
+      pod: pod
+      extra: {}
+    metrics:
+      # annotations: the test pod serves platform_probe_marker on metrics.port and carries
+      # podAnnotations, for a collector that discovers pods that way.
+      # otlp: the test pod pushes it to otlp.endpoint instead.
+      method: annotations
+      port: 9090
+      podAnnotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: /metrics
+    otlp:
+      # The collector's OTLP/HTTP receiver, e.g. http://alloy.alloy.svc:4318. Needed for the
+      # trace check (and for metrics.method otlp); empty skips it.
+      endpoint: ""
+    # How long a signal may take to show up in Grafana.
+    timeout: 3m
 
 # Python services use about 30Mi each, the console about 35Mi.
 resources:

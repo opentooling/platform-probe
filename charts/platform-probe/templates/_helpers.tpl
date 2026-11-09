@@ -93,7 +93,8 @@ platform-probe/role: {{ .role }}
 
 {{/* Whether any suite that creates objects in the scratch namespace is on. */}}
 {{- define "platform-probe.writeSuites" -}}
-{{- if or .Values.suites.ingress.enabled .Values.suites.workloads.enabled .Values.suites.storage.enabled }}true{{ end }}
+{{- $s := .Values.suites }}
+{{- if or $s.ingress.enabled $s.workloads.enabled $s.storage.enabled $s.observability.enabled }}true{{ end }}
 {{- end }}
 
 {{/* Labels for sidecar injection. Pass a dict: ctx, mesh (bool). */}}
@@ -130,6 +131,13 @@ capabilities:
 {{- end }}
 {{- if and .Values.auth.oidc.enabled (or (not .Values.auth.oidc.issuerUrl) (not .Values.auth.oidc.clientId) (not .Values.auth.oidc.clientSecret.existingSecret)) }}
 {{- fail "auth.oidc.enabled needs auth.oidc.issuerUrl, auth.oidc.clientId and auth.oidc.clientSecret.existingSecret" }}
+{{- end }}
+{{- $o := .Values.suites.observability }}
+{{- if and $o.enabled (or (not $o.grafana.url) (not $o.grafana.token.existingSecret)) }}
+{{- fail "suites.observability.enabled needs suites.observability.grafana.url and .grafana.token.existingSecret" }}
+{{- end }}
+{{- if not (has $o.metrics.method (list "annotations" "otlp")) }}
+{{- fail "suites.observability.metrics.method must be annotations or otlp" }}
 {{- end }}
 {{- $pct := list (int .Values.routes.splitV2Percent) (int .Values.mesh.splitV2Percent) }}
 {{- range $pct }}

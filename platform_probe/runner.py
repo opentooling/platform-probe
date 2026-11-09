@@ -46,6 +46,7 @@ GROUP_MESH = "Service mesh"
 GROUP_INGRESS = "Ingress & certificates"
 GROUP_WORKLOADS = "Workload security"
 GROUP_STORAGE = "Storage"
+GROUP_OBSERVABILITY = "Observability"
 
 # The connectivity suite (the three groups above) always runs; the others are switched on in
 # the chart's suites.* values.

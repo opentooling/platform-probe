@@ -160,7 +160,7 @@ class PodResult:
         return self.reason or f"pod {self.phase or 'not started'}"
 
 
-def _waiting_reason(pod: dict) -> str:
+def waiting_reason(pod: dict) -> str:
     st = pod.get("status") or {}
     for cs in st.get("containerStatuses") or []:
         w = (cs.get("state") or {}).get("waiting")
@@ -228,7 +228,7 @@ async def run_task(
             except ValueError:
                 res.reason = (term.get("message") or term.get("reason") or "").strip()[-300:]
     if res.phase not in ("Succeeded", "Failed"):
-        res.reason = f"didn't finish in {timeout:.0f}s: " + (_waiting_reason(final) or f"pod {res.phase}")
+        res.reason = f"didn't finish in {timeout:.0f}s: " + (waiting_reason(final) or f"pod {res.phase}")
     return res
 
 
@@ -276,7 +276,7 @@ async def ensure_backend(p: Probe) -> str:
             120,
         )
         if kube.find(kube.conditions((final.get("status") or {}).get("conditions")), "Ready").status != "True":
-            raise ProbeError("the test backend didn't become ready in 120s: " + (_waiting_reason(final) or "not ready"))
+            raise ProbeError("the test backend didn't become ready in 120s: " + (waiting_reason(final) or "not ready"))
     except Exception as e:
         p.state["backend"] = e
         raise
