@@ -143,6 +143,9 @@ class Scratch:
     # ConfigMap in the scratch namespace with the CA bundle the test pods trust, and its key.
     ca_config_map: str = ""
     ca_key: str = "ca-bundle.crt"
+    # The Service the chart creates for the ingress checks' backend pod, which it selects by
+    # the platform-probe/backend label.
+    backend_service: str = ""
     # Pull secrets in the scratch namespace for the probe's image.
     image_pull_secrets: list[str] = field(default_factory=list)
 

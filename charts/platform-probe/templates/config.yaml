@@ -60,6 +60,7 @@
   "scratch" (dict
     "namespace" (include "platform-probe.scratchNamespace" .)
     "caConfigMap" (include "platform-probe.caConfigMap" .)
+    "backendService" (ternary (printf "%s-ingress-backend" $fn) "" $v.suites.ingress.enabled)
     "caKey" (ternary $v.trustedCA.key "ca-bundle.crt" (ne $v.trustedCA.configMap ""))
     "imagePullSecrets" $pullSecrets)
   "suites" (dict

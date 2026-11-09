@@ -27,7 +27,7 @@ def make_probe(fake: FakeKube, **suites) -> Probe:
             "release": "probe",
             "namespace": "platform-probe",
             "image": "ghcr.io/opentooling/platform-probe:test",
-            "scratch": {"caConfigMap": "probe-ca-bundle"},
+            "scratch": {"caConfigMap": "probe-ca-bundle", "backendService": "probe-ingress-backend"},
             "suites": suites,
         }
     )
@@ -284,8 +284,10 @@ def test_routes(tmp_path):
     out = go(p, ingress.check_edge)
     assert out.status == Status.PASS and "HTTP → 302 redirect" in out.detail, out
     assert go(p, ingress.check_reencrypt).status == Status.PASS
-    # The backend is created once and shared.
-    assert len(fake.items(f"/api/v1/namespaces/{NS}/services")) == 1
+    # One backend pod, shared, behind the chart's Service: the console creates no Service.
+    backends = [o for o in fake.items(PODS) if o["metadata"]["labels"].get("platform-probe/backend") == "true"]
+    assert len(backends) == 1
+    assert not any("/services" in path for method, path in fake.calls if method.startswith("POST"))
     out = go(p, ingress.check_passthrough)
     assert out.status == Status.FAIL and "router terminated TLS" in out.hint, out
     fake.fetch = ok_fetch(issuer="CN=openshift-service-serving-signer@1700000000")

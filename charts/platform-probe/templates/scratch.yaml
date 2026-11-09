@@ -27,10 +27,8 @@ rules:
     resources: ["pods"]
     verbs: ["create", "get", "list", "delete"]
   {{- if .Values.suites.ingress.enabled }}
-  # The ingress backend's Service and the Routes to it.
-  - apiGroups: [""]
-    resources: ["services"]
-    verbs: ["create", "get", "list", "delete"]
+  # Routes to the backend Service below. The console may not create Services, which would
+  # let it take traffic meant for other pods.
   - apiGroups: ["route.openshift.io"]
     resources: ["routes"]
     verbs: ["create", "get", "list", "delete"]
@@ -72,6 +70,33 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "platform-probe.sa" (dict "ctx" . "role" "console") }}
     namespace: {{ .Release.Namespace }}
+{{- if .Values.suites.ingress.enabled }}
+---
+# The ingress checks' backend: each run starts a pod with the backend label, serving HTTP on
+# 8080 and HTTPS on 8443 with the certificate OpenShift's service CA puts in <name>-tls.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fn }}-ingress-backend
+  namespace: {{ $ns }}
+  labels:
+    {{- include "platform-probe.labels" . | nindent 4 }}
+  annotations:
+    service.beta.openshift.io/serving-cert-secret-name: {{ $fn }}-ingress-backend-tls
+spec:
+  selector:
+    platform-probe/release: {{ .Release.Name }}
+    platform-probe/backend: "true"
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+    - name: https
+      port: 8443
+      targetPort: 8443
+      protocol: TCP
+{{- end }}
 {{- if and .Values.trustedCA.openshiftInjected (not .Values.trustedCA.configMap) }}
 ---
 # The cluster trust bundle for the test pods, which check the router's certificate with it.

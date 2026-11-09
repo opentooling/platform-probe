@@ -124,8 +124,9 @@ suites:
     snapshotClass: csi-aws-vsc                            # optional
 ```
 
-They test from a tenant's side, so they need to create things: pods, a Service and Routes,
-PVCs and snapshots, a cert-manager Certificate. All of it goes into a **scratch namespace**,
+They test from a tenant's side, so they need to create things: pods, Routes, PVCs and
+snapshots, a cert-manager Certificate. (The Service the Routes point at comes with the chart:
+the console may not create Services, which would let it take traffic meant for other pods.) All of it goes into a **scratch namespace**,
 `<release namespace>-scratch` by default, where the console gets a Role and nothing more
 (cluster-wide it can only read IngressControllers and StorageClasses). Everything a run creates
 is labelled with the release and the run, and deleted when the run ends; the next run also

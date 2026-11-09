@@ -35,7 +35,6 @@ CA_FILE = CA_DIR + "/ca-bundle.crt"
 KINDS = (
     "/api/v1/namespaces/{ns}/pods",
     "/apis/route.openshift.io/v1/namespaces/{ns}/routes",
-    "/api/v1/namespaces/{ns}/services",
     "/apis/cert-manager.io/v1/namespaces/{ns}/certificates",
     "/apis/snapshot.storage.k8s.io/v1/namespaces/{ns}/volumesnapshots",
     "/api/v1/namespaces/{ns}/persistentvolumeclaims",
@@ -234,36 +233,23 @@ async def run_task(
 
 
 async def ensure_backend(p: Probe) -> str:
-    """A Service and pod the ingress checks route to, created once per run: the probe's own
-    pricing service on HTTP 8080, and on HTTPS 8443 with a certificate from OpenShift's
-    service CA. Returns the Service name."""
+    """The pod the ingress checks route to, started once per run behind the backend Service the
+    chart creates (the console may not create Services): the probe's own pricing service on
+    HTTP 8080, and on HTTPS 8443 with the Service's certificate from OpenShift's service CA.
+    Returns the Service name."""
     if "backend" in p.state:
         if isinstance(p.state["backend"], Exception):
             raise p.state["backend"]
         return p.state["backend"]
-    svc = name(p, "backend")
+    svc = p.cfg.scratch.backend_service
+    pod_name = name(p, "backend")
     try:
-        await p.kube.create(
-            path(p, "/api/v1/services"),
-            {
-                "apiVersion": "v1",
-                "kind": "Service",
-                "metadata": meta(
-                    p, svc, annotations={"service.beta.openshift.io/serving-cert-secret-name": svc + "-tls"}
-                ),
-                "spec": {
-                    "selector": {LABEL_RUN: p.run_id, "platform-probe/backend": "true"},
-                    "ports": [
-                        {"name": "http", "port": 8080, "targetPort": 8080},
-                        {"name": "https", "port": 8443, "targetPort": 8443},
-                    ],
-                },
-            },
-        )
+        if not svc:
+            raise ProbeError("no backend Service in the config (scratch.backendService)")
         pod = {
             "apiVersion": "v1",
             "kind": "Pod",
-            "metadata": meta(p, svc),
+            "metadata": meta(p, pod_name),
             "spec": pod_spec(
                 p,
                 {
@@ -285,7 +271,7 @@ async def ensure_backend(p: Probe) -> str:
         pod["spec"]["restartPolicy"] = "Always"
         await p.kube.create(path(p, "/api/v1/pods"), pod)
         final = await wait_for(
-            lambda: p.kube.get(path(p, "/api/v1/pods", svc)),
+            lambda: p.kube.get(path(p, "/api/v1/pods", pod_name)),
             lambda o: kube.find(kube.conditions((o.get("status") or {}).get("conditions")), "Ready").status == "True",
             120,
         )
