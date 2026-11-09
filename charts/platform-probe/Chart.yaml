@@ -1,0 +1,22 @@
+apiVersion: v2
+name: platform-probe
+description: Tests the features an OpenShift platform promises its tenants, end to end. First suite: a Connectivity Link API gateway and OpenShift Service Mesh, with a small demo app.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/opentooling/platform-probe
+sources:
+  - https://github.com/opentooling/platform-probe
+keywords:
+  - connectivity-link
+  - kuadrant
+  - gateway-api
+  - istio
+  - service-mesh
+  - openshift
+maintainers:
+  - name: opentooling
+# No kubeVersion: what matters is Gateway API v1.1 (HTTPRoute timeouts), Istio 1.22 (its v1
+# APIs, OSSM 3) and Kuadrant v1 policies, which a Kubernetes version can't express.
+annotations:
+  artifacthub.io/license: MIT

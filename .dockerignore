@@ -1,0 +1,5 @@
+# The image needs requirements.txt and platform_probe/ only.
+*
+!requirements.txt
+!platform_probe/
+**/__pycache__

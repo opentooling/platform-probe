@@ -1,0 +1,20 @@
+platform-probe is installed in {{ .Release.Namespace }}. Its routes attach to {{ .Values.gateway.namespace }}/{{ .Values.gateway.name }} as {{ .Values.gateway.hostname }}.
+
+1. The gateway only accepts routes from labelled namespaces. On the RHCL platform:
+
+   oc label namespace {{ .Release.Namespace }} api-gateway-access=true
+
+2. Open the console:
+
+   oc port-forward -n {{ .Release.Namespace }} svc/{{ include "platform-probe.fullname" . }}-console 8080:8080
+
+   then browse to http://localhost:8080 and choose "Run all".
+
+3. Or run the whole suite from the command line; it fails if any check fails:
+
+   helm test {{ .Release.Name }} -n {{ .Release.Namespace }} --logs
+{{- if and .Values.auth.apiKeys.create (not (or .Values.auth.apiKeys.alice .Values.auth.apiKeys.bob)) }}
+
+The API keys for alice and bob were generated and are kept on upgrade. Under Argo CD, set
+auth.apiKeys.alice and auth.apiKeys.bob, or they change on every sync.
+{{- end }}

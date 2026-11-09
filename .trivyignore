@@ -1,0 +1,20 @@
+# Findings the Trivy scans in CI should not report, one ID per line, each with the reason.
+# The gate only fails on HIGH and CRITICAL; these are recorded so a full report stays clean
+# and each one is a decision, not an oversight.
+
+# Fixed UID and GID. OpenShift's restricted-v2 SCC assigns the UID from the namespace's range
+# and rejects a pod that asks for another, so the chart sets runAsNonRoot and leaves the IDs
+# to the platform.
+AVD-KSV-0020
+AVD-KSV-0021
+
+# "Workloads in the default namespace": Trivy renders the chart without a namespace. The chart
+# is installed into its own (see the README).
+AVD-KSV-0110
+
+# Trusted registries: which registries a cluster accepts is the cluster's policy
+# (image.repository is a value), not the chart's.
+AVD-KSV-0125
+
+# Dockerfile HEALTHCHECK: Kubernetes ignores it; the chart has readiness and liveness probes.
+AVD-DS-0026

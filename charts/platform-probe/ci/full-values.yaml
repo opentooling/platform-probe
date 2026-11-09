@@ -1,0 +1,23 @@
+# Every optional feature on, as a cluster with OIDC and an external allowed host would run it.
+gateway:
+  hostname: probe.apps.example.com
+  address: 10.0.0.50
+  tls:
+    issuerContains: internal-ca
+auth:
+  apiKeys:
+    alice: alice-ci-key
+    bob: bob-ci-key
+  oidc:
+    enabled: true
+    issuerUrl: https://sso.example.com:8443/realms/api
+    clientId: platform-probe
+    clientSecret:
+      existingSecret: platform-probe-oidc
+mesh:
+  revision: default
+  egress:
+    allowedHosts: [api.github.com]
+    allowedUrl: https://api.github.com/
+trustedCA:
+  configMap: my-ca

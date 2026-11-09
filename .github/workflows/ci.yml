@@ -1,0 +1,354 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly, so newly published advisories against an unchanged image are found.
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE_NAME: ghcr.io/opentooling/platform-probe
+  CHART_REGISTRY: oci://ghcr.io/opentooling/charts
+  CHART: charts/platform-probe
+  HELM_VERSION: v3.22.0
+  KUBECONFORM_VERSION: v0.8.0
+  # Kuadrant CRDs the AuthPolicy and RateLimitPolicy templates are validated against.
+  KUADRANT_VERSION: v1.6.0
+
+jobs:
+  # The gate: every other job waits for it. It scans what goes into the image and the cluster
+  # before anything is built: Python dependencies (requirements.txt), committed secrets, the Dockerfile, and the chart
+  # as it renders with each CI values file (Trivy's own Helm scan only sees the defaults).
+  # The image itself is scanned again after the build, in the image job.
+  scan:
+    name: Trivy scan (dependencies, secrets, misconfigurations)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
+        with:
+          version: ${{ env.HELM_VERSION }}
+      - name: Scan the repository
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          trivyignores: .trivyignore
+      - name: Render the chart with each CI values file and example
+        run: |
+          mkdir -p rendered
+          for f in "$CHART"/ci/*.yaml examples/*-values.yaml; do
+            helm template probe "$CHART" -n platform-probe -f "$f" --set features.consoleRoute=true \
+              > "rendered/$(basename "$f")"
+          done
+      - name: Scan the rendered manifests
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: rendered
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          trivyignores: .trivyignore
+          skip-setup-trivy: true
+
+  test:
+    name: Python tests
+    needs: scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          # The distroless runtime image ships Python 3.13.
+          python-version: "3.13"
+      - uses: azure/setup-helm@v5
+        with:
+          version: ${{ env.HELM_VERSION }}
+      - name: Install the pinned dependencies, then pytest and ruff
+        run: |
+          pip install --require-hashes -r requirements.txt
+          pip install pytest==9.2.0 ruff==0.17.4
+      - name: Lint and format
+        run: |
+          ruff check .
+          ruff format --check .
+      # The chart renders the console's config; the console refuses keys it doesn't know.
+      # Loading the rendered file proves the two agree.
+      - name: Test, including the config the chart renders
+        run: |
+          helm template probe "$CHART" -n platform-probe --show-only templates/config.yaml \
+            | /usr/bin/python3 -c 'import sys, yaml; print(next(d for d in yaml.safe_load_all(sys.stdin) if d and d["metadata"]["name"].endswith("-config"))["data"]["config.json"])' \
+            > "$RUNNER_TEMP/config.json"
+          RENDERED_CONFIG="$RUNNER_TEMP/config.json" python -m pytest -q
+
+  chart:
+    name: Helm chart
+    needs: scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Lint with the defaults, every CI values file and every example
+        run: |
+          helm lint "$CHART"
+          for f in "$CHART"/ci/*.yaml examples/*-values.yaml; do helm lint "$CHART" -f "$f"; done
+
+      # extraObjects is a feature, so it is proven to render rather than assumed: once as a
+      # YAML object and once as a templated string, each resolving the release's own helpers,
+      # and conditional items only when their condition holds.
+      - name: Render extraObjects
+        run: |
+          helm template ci "$CHART" -n ci -f "$CHART/ci/extra-objects-values.yaml" > rendered.yaml
+          grep -q "platform-probe-ci-object" rendered.yaml
+          grep -q "platform-probe-ci-string" rendered.yaml
+          grep -qE "namespace: '?ci'?" rendered.yaml
+          grep -q 'rendered: "yes"' rendered.yaml
+          grep -q 'platform-probe-ci-flag-on' rendered.yaml
+          grep -q 'platform-probe-ci-string-on' rendered.yaml
+          grep -q 'platform-probe-ci-no-when' rendered.yaml
+          grep -q 'platform-probe-ci-dig-on' rendered.yaml
+          if grep -e 'ci-flag-off' -e 'ci-flag-missing' -e 'ci-string-off' -e 'ci-dig-absent' rendered.yaml; then
+            echo "::error::a conditional extraObjects item rendered with its condition off"; exit 1
+          fi
+          echo "Both extraObjects forms rendered, conditional ones only when enabled."
+
+      # Every object the chart can render, checked strictly against its schema: Kubernetes,
+      # Gateway API and Istio from the CRDs catalog, Kuadrant from its own CRDs.
+      - name: Validate rendered manifests
+        run: |
+          curl -fsSL "https://github.com/yannh/kubeconform/releases/download/$KUBECONFORM_VERSION/kubeconform-linux-amd64.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP" kubeconform
+          mkdir -p schemas/kuadrant.io crds
+          for k in authpolicies ratelimitpolicies; do
+            curl -fsSL -o "crds/$k.yaml" \
+              "https://raw.githubusercontent.com/Kuadrant/kuadrant-operator/$KUADRANT_VERSION/config/crd/bases/kuadrant.io_$k.yaml"
+          done
+          python3 hack/crd2schema.py schemas/kuadrant.io crds/*.yaml
+          helm template probe "$CHART" -n platform-probe > default.yaml
+          for f in "$CHART"/ci/full-values.yaml "$CHART"/ci/minimal-values.yaml examples/*-values.yaml; do
+            helm template probe "$CHART" -n platform-probe -f "$f" --set features.consoleRoute=true \
+              > "$(basename "$f" -values.yaml).yaml"
+          done
+          # Route has no published schema; KeycloakClient's CRD lives in keycloak-client-operator.
+          "$RUNNER_TEMP/kubeconform" -strict -summary -kubernetes-version 1.31.0 -skip Route,KeycloakClient \
+            -schema-location default \
+            -schema-location 'schemas/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+            default.yaml full.yaml minimal.yaml rhcl-platform.yaml
+
+  image:
+    name: Build, smoke-test and scan image (${{ matrix.arch }})
+    needs: scan
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          # Native Arm, so the smoke test runs the arm64 wheels for real.
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    env:
+      # Publish only from main, and only with credentials that can write to the opentooling org.
+      PUBLISH: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && (secrets.GHCR_TOKEN != '' || github.repository_owner == 'opentooling') }}
+    outputs:
+      publish: ${{ env.PUBLISH }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - name: Version
+        run: echo "VERSION=sha-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+      - name: Image labels
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE_NAME }}
+      - name: Build image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          tags: platform-probe:ci
+          build-args: VERSION=${{ env.VERSION }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=image-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=image-${{ matrix.arch }}
+
+      # OpenShift runs containers as an arbitrary UID in group 0, never as the image's user,
+      # so the smoke test starts it that way: a frontend, chained to a pricing service.
+      - name: Smoke-test as an arbitrary UID, the way OpenShift runs it
+        run: |
+          docker network create smoke
+          docker run -d --name pricing --network smoke --user 1000650000:0 --read-only -e ROLE=pricing platform-probe:ci
+          docker run -d --name frontend --network smoke --user 1000650000:0 --read-only -p 8080:8080 \
+            -e ROLE=frontend -e NEXT=http://pricing:8080 platform-probe:ci
+          test "$(docker run --rm platform-probe:ci version)" = "$VERSION"
+          for i in $(seq 1 30); do
+            if body="$(curl -fsS http://localhost:8080/)"; then
+              echo "$body"
+              echo "$body" | grep -qE '"service": ?"pricing"' && exit 0
+            fi
+            sleep 1
+          done
+          docker logs frontend; docker logs pricing
+          exit 1
+
+      - name: Trivy vulnerability scan (fails on fixable high/critical)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: platform-probe:ci
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          trivyignores: .trivyignore
+
+      - name: Explain skipped publish
+        if: env.PUBLISH != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: echo "::notice::Image not published to $IMAGE_NAME. Add a GHCR_TOKEN secret (and GHCR_USERNAME variable) or move the repo to the opentooling org."
+      - name: Log in to GitHub Container Registry
+        if: env.PUBLISH == 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ vars.GHCR_USERNAME || github.actor }}
+          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+      # The same build, from cache, pushed by digest; the publish job joins the two
+      # architectures into one image index.
+      - name: Push the tested image by digest
+        if: env.PUBLISH == 'true'
+        id: push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          build-args: VERSION=${{ env.VERSION }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=image-${{ matrix.arch }}
+      - name: Record digest
+        if: env.PUBLISH == 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+      - uses: actions/upload-artifact@v7
+        if: env.PUBLISH == 'true'
+        with:
+          name: digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish multi-arch image to GHCR
+    if: needs.image.outputs.publish == 'true'
+    # Only a commit that passed every check, the Trivy gate first.
+    needs: [scan, test, chart, image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: ${{ steps.short.outputs.tag }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: digest-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/digests
+      - uses: docker/setup-buildx-action@v4
+      - name: Short tag
+        id: short
+        run: echo "tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - name: Image tags
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=sha-
+            type=sha,format=long,prefix=sha-
+            type=raw,value=main
+            type=raw,value=latest
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ vars.GHCR_USERNAME || github.actor }}
+          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+      - name: Create manifest list (amd64 + arm64)
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.IMAGE_NAME }}@sha256:%s ' *)
+      - name: Show the published image
+        run: |
+          docker buildx imagetools inspect "$IMAGE_NAME:${{ steps.short.outputs.tag }}"
+          echo "::notice::Published $IMAGE_NAME:${{ steps.short.outputs.tag }} (also sha-$GITHUB_SHA, main, latest)"
+
+  publish-chart:
+    name: Publish Helm chart to GHCR
+    # After the image, so the chart's default image tag always resolves.
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      # Version: major.minor from Chart.yaml, patch = CI run number, so a plain `helm install`
+      # gets the newest. appVersion, the default image tag, is the image built from this commit.
+      - name: Package the chart
+        id: package
+        run: |
+          base="$(sed -n 's/^version: *\([0-9]*\.[0-9]*\)\..*/\1/p' "$CHART/Chart.yaml")"
+          version="$base.${{ github.run_number }}"
+          helm package "$CHART" --version "$version" \
+            --app-version "${{ needs.publish.outputs.tag }}" --destination "$RUNNER_TEMP"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Push the chart
+        env:
+          REGISTRY_USER: ${{ vars.GHCR_USERNAME || github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$REGISTRY_PASSWORD" | helm registry login ghcr.io -u "$REGISTRY_USER" --password-stdin
+          helm push "$RUNNER_TEMP/platform-probe-${{ steps.package.outputs.version }}.tgz" "$CHART_REGISTRY"
+
+      # Pulled back and rendered, to prove what was published installs the image published with it.
+      - name: Check the published chart
+        run: |
+          version="${{ steps.package.outputs.version }}"
+          helm show chart "$CHART_REGISTRY/platform-probe" --version "$version"
+          images="$(helm template probe "$CHART_REGISTRY/platform-probe" --version "$version" \
+            | sed -n 's/^ *image: *//p' | tr -d '"' | sort -u)"
+          echo "$images"
+          test "$images" = "$IMAGE_NAME:${{ needs.publish.outputs.tag }}"
+          echo "::notice::Published $CHART_REGISTRY/platform-probe $version, installing $images"

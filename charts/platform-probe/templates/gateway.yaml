@@ -1,0 +1,230 @@
+{{- $fn := include "platform-probe.fullname" . }}
+{{- $v := .Values }}
+{{- $backend := dict "frontend" (printf "%s-frontend" $fn) "v1" (printf "%s-catalog-v1" $fn) "v2" (printf "%s-catalog-v2" $fn) }}
+{{- define "platform-probe.parentRef" -}}
+parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: {{ .Values.gateway.name }}
+    namespace: {{ .Values.gateway.namespace }}
+    sectionName: {{ .Values.gateway.sectionName }}
+hostnames:
+  - {{ .Values.gateway.hostname | quote }}
+{{- end }}
+{{- define "platform-probe.routeRef" -}}
+targetRef:
+  group: gateway.networking.k8s.io
+  kind: HTTPRoute
+  name: {{ . }}
+{{- end }}
+# /public: anyone, with a route-wide rate limit.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ $fn }}-public
+  labels:
+    {{- include "platform-probe.labels" . | nindent 4 }}
+spec:
+  {{- include "platform-probe.parentRef" . | nindent 2 }}
+  rules:
+    - matches:
+        - path: { type: PathPrefix, value: /public }
+      backendRefs:
+        - name: {{ $backend.frontend }}
+          port: 8080
+---
+# /locked: no AuthPolicy of its own, so the gateway's default (deny-all) applies.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ $fn }}-locked
+  labels:
+    {{- include "platform-probe.labels" . | nindent 4 }}
+spec:
+  {{- include "platform-probe.parentRef" . | nindent 2 }}
+  rules:
+    - matches:
+        - path: { type: PathPrefix, value: /locked }
+      backendRefs:
+        - name: {{ $backend.frontend }}
+          port: 8080
+---
+# Protected routes, one rule per gateway feature.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ $fn }}-api
+  labels:
+    {{- include "platform-probe.labels" . | nindent 4 }}
+spec:
+  {{- include "platform-probe.parentRef" . | nindent 2 }}
+  rules:
+    - matches:
+        - path: { type: PathPrefix, value: /api }
+      backendRefs:
+        - name: {{ $backend.frontend }}
+          port: 8080
+    # Header match: more specific than the weighted rule below, so it wins.
+    - matches:
+        - path: { type: PathPrefix, value: /split }
+          headers:
+            - name: x-version
+              value: v2
+      backendRefs:
+        - name: {{ $backend.v2 }}
+          port: 8080
+    - matches:
+        - path: { type: PathPrefix, value: /split }
+      backendRefs:
+        - name: {{ $backend.v1 }}
+          port: 8080
+          weight: {{ sub 100 (int $v.routes.splitV2Percent) }}
+        - name: {{ $backend.v2 }}
+          port: 8080
+          weight: {{ int $v.routes.splitV2Percent }}
+    - matches:
+        - path: { type: PathPrefix, value: /rewrite }
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /echo
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            set:
+              - name: x-probe-added
+                value: gateway
+            remove:
+              - x-probe-remove
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - name: x-probe-response
+                value: gateway
+      backendRefs:
+        - name: {{ $backend.frontend }}
+          port: 8080
+    - matches:
+        - path: { type: PathPrefix, value: /mirror }
+      filters:
+        - type: RequestMirror
+          requestMirror:
+            backendRef:
+              name: {{ $backend.v2 }}
+              port: 8080
+      backendRefs:
+        - name: {{ $backend.v1 }}
+          port: 8080
+    - matches:
+        - path: { type: PathPrefix, value: /timeout }
+      timeouts:
+        request: {{ $v.routes.timeout }}
+      backendRefs:
+        - name: {{ $backend.frontend }}
+          port: 8080
+---
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: {{ $fn }}-public
+  labels:
+    {{- include "platform-probe.labels" . | nindent 4 }}
+spec:
+  {{- include "platform-probe.routeRef" (printf "%s-public" $fn) | nindent 2 }}
+  rules:
+    authentication:
+      public:
+        anonymous: {}
+---
+apiVersion: kuadrant.io/v1
+kind: RateLimitPolicy
+metadata:
+  name: {{ $fn }}-public
+  labels:
+    {{- include "platform-probe.labels" . | nindent 4 }}
+spec:
+  {{- include "platform-probe.routeRef" (printf "%s-public" $fn) | nindent 2 }}
+  limits:
+    route:
+      rates:
+        - limit: {{ $v.rateLimits.public.limit }}
+          window: {{ $v.rateLimits.public.window }}
+---
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: {{ $fn }}-api
+  labels:
+    {{- include "platform-probe.labels" . | nindent 4 }}
+spec:
+  {{- include "platform-probe.routeRef" (printf "%s-api" $fn) | nindent 2 }}
+  rules:
+    authentication:
+      api-key:
+        apiKey:
+          selector:
+            matchLabels:
+              platform-probe/api: {{ include "platform-probe.apiKeySelector" . }}
+        credentials:
+          authorizationHeader:
+            prefix: {{ $v.auth.apiKeys.prefix }}
+      {{- if $v.auth.oidc.enabled }}
+      oidc:
+        jwt:
+          issuerUrl: {{ $v.auth.oidc.issuerUrl }}
+      {{- end }}
+    # Writes need group admin: an annotation on API-key Secrets, the "groups" claim on JWTs.
+    authorization:
+      writes-need-admin:
+        when:
+          - predicate: request.method == 'POST'
+        patternMatching:
+          patterns:
+            - predicate: >-
+                has(auth.identity.sub)
+                ? (has(auth.identity.groups) && 'admin' in auth.identity.groups)
+                : auth.identity.metadata.annotations['platform-probe/groups'].contains('admin')
+    # A uniform caller identity for the RateLimitPolicy, as in the RHCL api chart.
+    response:
+      success:
+        filters:
+          identity:
+            json:
+              properties:
+                userid:
+                  expression: >-
+                    has(auth.identity.sub)
+                    ? auth.identity.sub
+                    : auth.identity.metadata.annotations['secret.kuadrant.io/user-id']
+                planid:
+                  expression: >-
+                    has(auth.identity.sub)
+                    ? (has(auth.identity.plan) ? string(auth.identity.plan) : 'free')
+                    : auth.identity.metadata.annotations['secret.kuadrant.io/plan-id']
+---
+apiVersion: kuadrant.io/v1
+kind: RateLimitPolicy
+metadata:
+  name: {{ $fn }}-api
+  labels:
+    {{- include "platform-probe.labels" . | nindent 4 }}
+spec:
+  {{- include "platform-probe.routeRef" (printf "%s-api" $fn) | nindent 2 }}
+  limits:
+    {{- range $plan, $r := $v.rateLimits.plans }}
+    plan-{{ $plan }}:
+      rates:
+        - limit: {{ $r.limit }}
+          window: {{ $r.window }}
+      counters:
+        - expression: auth.identity.userid
+      when:
+        - predicate: auth.identity.planid == '{{ $plan }}'
+    {{- end }}
+    {{- with $v.rateLimits.total }}
+    total:
+      rates:
+        - limit: {{ .limit }}
+          window: {{ .window }}
+    {{- end }}

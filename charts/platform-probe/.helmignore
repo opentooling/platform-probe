@@ -1,0 +1,8 @@
+.DS_Store
+.git/
+.gitignore
+*.tmproj
+.idea/
+.vscode/
+# CI-only value files: they are for rendering checks, not for the packaged chart.
+ci/

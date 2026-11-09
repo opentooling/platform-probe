@@ -1,0 +1,16 @@
+# Everything optional off: no mesh policies, no NetworkPolicies, no CA bundle, no tests.
+expect:
+  defaultDeny: false
+  httpRedirect: false
+trustedCA:
+  openshiftInjected: false
+mesh:
+  strictMTLS: false
+  authorizationPolicies: false
+  trafficManagement: false
+  egress:
+    registryOnly: false
+networkPolicies:
+  enabled: false
+tests:
+  enabled: false

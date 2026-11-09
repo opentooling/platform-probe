@@ -1,0 +1,188 @@
+# platform-probe on the Connectivity Link platform from github.com/jugash/RHCL, with:
+#   - OIDC tokens from Keycloak, the client created by keycloak-client-operator
+#   - alice and bob's API keys kept in Vault and synced by External Secrets
+#   - optionally, an OpenShift Route for the console
+#
+# Before installing:
+#   oc new-project platform-probe
+#   oc label namespace platform-probe api-gateway-access=true
+#   # From the RHCL repo, as for any API: writes secret/rhcl/apikeys/platform-probe/<user> in Vault.
+#   scripts/vault-create-api-key.sh platform-probe alice
+#   scripts/vault-create-api-key.sh platform-probe bob
+#
+# Install:
+#   helm install probe oci://ghcr.io/opentooling/charts/platform-probe -n platform-probe \
+#     -f examples/rhcl-platform-values.yaml
+#   helm test probe -n platform-probe --logs
+
+gateway:
+  name: api-gateway
+  namespace: api-gateway
+  # Under the gateway's wildcard listener (gateway.hostname in the RHCL site values).
+  hostname: probe.api.example.internal
+  tls:
+    # Part of the gateway certificate's issuer DN, e.g. your internal CA's CN. Empty skips it.
+    issuerContains: ""
+
+auth:
+  apiKeys:
+    namespace: kuadrant-system
+    # The keys come from Vault (extraObjects below), so the chart doesn't create them.
+    create: false
+  oidc:
+    enabled: true
+    issuerUrl: https://sso.example.internal/realms/api
+    clientId: platform-probe
+    clientSecret:
+      # Written by keycloak-client-operator (credentialsSecretRef below), fields client-id
+      # and client-secret. The console waits for it before it starts.
+      existingSecret: platform-probe-oidc
+      key: client-secret
+
+# The RHCL platform runs mTLS PERMISSIVE mesh-wide; the probe makes its own services STRICT.
+mesh:
+  egress:
+    # The issuer's host (sso.example.internal) is allowed automatically. Add any other
+    # external host the console must reach.
+    allowedHosts: []
+
+# Switches for the extraObjects below. Avoid on, off, yes and no as names: YAML reads those
+# keys as booleans.
+features:
+  keycloakClient: true
+  vaultKeys: true
+  # The console has no login and can send bursts of traffic: expose it only on a network you
+  # trust. Otherwise use: oc port-forward svc/probe-platform-probe-console 8080:8080
+  consoleRoute: false
+
+extraObjects:
+  # The probe's OIDC client. Client credentials only: no browser login, so no redirectUris,
+  # postLogoutRedirectUris or webOrigins.
+  - when: "{{ .Values.features.keycloakClient }}"
+    object:
+      apiVersion: keycloak.jugash.com/v1alpha1
+      kind: KeycloakClient
+      metadata:
+        name: platform-probe
+      spec:
+        realm: api
+        clientId: '{{ .Values.auth.oidc.clientId }}'
+        name: platform-probe
+        description: 'Gets tokens for the OIDC check of platform-probe in {{ .Release.Namespace }}'
+        publicClient: false
+        serviceAccountsEnabled: true
+        standardFlowEnabled: false
+        directAccessGrantsEnabled: false
+        defaultClientScopes:
+          - profile
+          - roles
+        credentialsSecretRef:
+          name: '{{ .Values.auth.oidc.clientSecret.existingSecret }}'
+        protocolMappers:
+          # The gateway's per-plan rate limits read the plan from this claim.
+          - name: plan
+            protocol: openid-connect
+            protocolMapper: oidc-hardcoded-claim-mapper
+            config:
+              claim.name: plan
+              claim.value: gold
+              jsonType.label: String
+              access.token.claim: "true"
+              id.token.claim: "false"
+
+  # alice and bob for Authorino: one Secret each in kuadrant-system, with the labels the probe's
+  # AuthPolicy selects and the annotations its rate limits and authorization read.
+  - when: "{{ .Values.features.vaultKeys }}"
+    object: |
+      {{- range $user, $u := dict "alice" (dict "plan" "gold" "groups" "admin") "bob" (dict "plan" "free" "groups" "") }}
+      ---
+      apiVersion: external-secrets.io/v1
+      kind: ExternalSecret
+      metadata:
+        name: {{ include "platform-probe.fullname" $ }}-apikey-{{ $user }}
+        namespace: {{ $.Values.auth.apiKeys.namespace }}
+      spec:
+        refreshInterval: 1m
+        secretStoreRef:
+          kind: ClusterSecretStore
+          name: vault
+        target:
+          name: {{ include "platform-probe.fullname" $ }}-apikey-{{ $user }}
+          creationPolicy: Owner
+          template:
+            metadata:
+              labels:
+                authorino.kuadrant.io/managed-by: authorino
+                platform-probe/api: {{ include "platform-probe.apiKeySelector" $ }}
+              annotations:
+                secret.kuadrant.io/user-id: {{ $user }}
+                secret.kuadrant.io/plan-id: {{ $u.plan }}
+                platform-probe/groups: {{ $u.groups | quote }}
+        data:
+          - secretKey: api_key
+            remoteRef:
+              key: rhcl/apikeys/platform-probe/{{ $user }}
+              property: api_key
+      {{- end }}
+
+  # The same two keys for the console, which sends them as alice and bob.
+  - when: "{{ .Values.features.vaultKeys }}"
+    object:
+      apiVersion: external-secrets.io/v1
+      kind: ExternalSecret
+      metadata:
+        name: '{{ include "platform-probe.fullname" $ }}-apikeys'
+      spec:
+        refreshInterval: 1m
+        secretStoreRef:
+          kind: ClusterSecretStore
+          name: vault
+        target:
+          name: '{{ include "platform-probe.fullname" $ }}-apikeys'
+          creationPolicy: Owner
+        data:
+          - secretKey: alice
+            remoteRef:
+              key: rhcl/apikeys/platform-probe/alice
+              property: api_key
+          - secretKey: bob
+            remoteRef:
+              key: rhcl/apikeys/platform-probe/bob
+              property: api_key
+
+  - when: "{{ .Values.features.consoleRoute }}"
+    object:
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: '{{ include "platform-probe.fullname" $ }}-console'
+      spec:
+        to:
+          kind: Service
+          name: '{{ include "platform-probe.fullname" $ }}-console'
+        port:
+          targetPort: http
+        tls:
+          termination: edge
+          insecureEdgeTerminationPolicy: Redirect
+  # The chart's NetworkPolicies let only `helm test` reach the console; let the router in too.
+  - when: "{{ .Values.features.consoleRoute }}"
+    object:
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: '{{ include "platform-probe.fullname" $ }}-console-from-router'
+      spec:
+        podSelector:
+          matchLabels:
+            app.kubernetes.io/instance: '{{ .Release.Name }}'
+            app.kubernetes.io/component: console
+        policyTypes: [Ingress]
+        ingress:
+          - from:
+              - namespaceSelector:
+                  matchLabels:
+                    policy-group.network.openshift.io/ingress: ""
+            ports:
+              - port: 8080
+                protocol: TCP

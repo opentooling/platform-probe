@@ -1,0 +1,60 @@
+{{- if .Values.networkPolicies.enabled }}
+{{- $fn := include "platform-probe.fullname" . }}
+{{- $gateway := printf "namespaceSelector:\n  matchLabels:\n    kubernetes.io/metadata.name: %s\npodSelector:\n  matchLabels:\n    gateway.networking.k8s.io/gateway-name: %s" .Values.gateway.namespace .Values.gateway.name }}
+{{- $component := dict "ctx" . }}
+{{- /* Ingress only: who may call each service. Egress (istiod, DNS, the API server) stays open. */}}
+{{- $rules := list
+  (dict "name" "frontend" "selector" (include "platform-probe.componentSelector" (dict "ctx" . "component" "frontend"))
+        "from" (list $gateway "console"))
+  (dict "name" "catalog" "selector" (include "platform-probe.roleSelector" (dict "ctx" . "role" "catalog"))
+        "from" (list $gateway "frontend" "console" "outsider"))
+  (dict "name" "pricing" "selector" (include "platform-probe.roleSelector" (dict "ctx" . "role" "pricing"))
+        "from" (list "catalog-v1" "catalog-v2"))
+  (dict "name" "outsider" "selector" (include "platform-probe.componentSelector" (dict "ctx" . "component" "outsider"))
+        "from" (list "console"))
+  (dict "name" "console" "selector" (include "platform-probe.componentSelector" (dict "ctx" . "component" "console"))
+        "from" (list "test"))
+}}
+# Deny every ingress to the release's pods that a rule below doesn't allow.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fn }}-default-deny
+  labels:
+    {{- include "platform-probe.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "platform-probe.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+{{- range $r := $rules }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fn }}-{{ $r.name }}
+  labels:
+    {{- include "platform-probe.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- $r.selector | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- range $peer := $r.from }}
+        {{- if contains "namespaceSelector" $peer }}
+        - {{ $peer | nindent 10 | trim }}
+        {{- else }}
+        - podSelector:
+            matchLabels:
+              {{- include "platform-probe.componentSelector" (dict "ctx" $ "component" $peer) | nindent 14 }}
+        {{- end }}
+        {{- end }}
+      ports:
+        - port: 8080
+          protocol: TCP
+{{- end }}
+{{- end }}

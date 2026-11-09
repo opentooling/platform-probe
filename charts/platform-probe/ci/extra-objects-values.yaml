@@ -1,0 +1,71 @@
+# Rendered in CI to prove extraObjects works in both of its forms: a YAML
+# object and a templated string, each able to reach the release's own helpers;
+# and that a conditional item renders only when its condition holds — the
+# same cases the other opentooling charts are held to.
+features:
+  backups: true
+  tracing: false
+extraObjects:
+  - apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: '{{ include "platform-probe.fullname" $ }}-ci-object'
+    data:
+      namespace: '{{ .Release.Namespace }}'
+  - |
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: {{ include "platform-probe.fullname" $ }}-ci-string
+    data:
+      rendered: "yes"
+  - when: '{{ .Values.features.backups }}'
+    object:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: '{{ include "platform-probe.fullname" $ }}-ci-flag-on'
+  - when: '{{ .Values.features.tracing }}'
+    object:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: '{{ include "platform-probe.fullname" $ }}-ci-flag-off'
+  - when: '{{ .Values.features.missing }}'
+    object:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: '{{ include "platform-probe.fullname" $ }}-ci-flag-missing'
+  - when: false
+    object: |
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: {{ include "platform-probe.fullname" $ }}-ci-string-off
+  - when: true
+    object: |
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: {{ include "platform-probe.fullname" $ }}-ci-string-on
+  # No condition: always rendered.
+  - object:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: '{{ include "platform-probe.fullname" $ }}-ci-no-when'
+  # dig reads a flag whose map may not exist at all, as docs/DEPLOYMENT.md
+  # recommends: on when set, off — not an error — when the map is absent.
+  - when: '{{ dig "features" "backups" false .Values.AsMap }}'
+    object:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: '{{ include "platform-probe.fullname" $ }}-ci-dig-on'
+  - when: '{{ dig "nosuchmap" "flag" false .Values.AsMap }}'
+    object:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: '{{ include "platform-probe.fullname" $ }}-ci-dig-absent'

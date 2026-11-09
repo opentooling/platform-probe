@@ -1,0 +1,55 @@
+{{- if .Values.auth.apiKeys.create }}
+{{- $fn := include "platform-probe.fullname" . }}
+{{- $ak := .Values.auth.apiKeys }}
+{{- /*
+alice and bob's keys: set in values, else kept from the console's copy on upgrade, else new.
+Authorino reads them from $ak.namespace; the console reads its own copy in the release
+namespace, since a pod can't mount a Secret from another namespace.
+*/}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace (printf "%s-apikeys" $fn) }}
+{{- $users := dict
+  "alice" (dict "plan" "gold" "groups" "admin")
+  "bob" (dict "plan" "free" "groups" "")
+}}
+{{- $keys := dict }}
+{{- range $user := keys $users | sortAlpha }}
+{{- $key := get $ak $user }}
+{{- if not $key }}
+{{- $old := "" }}
+{{- if $existing }}
+{{- $old = dig "data" $user "" $existing }}
+{{- end }}
+{{- $key = ternary ($old | b64dec) (randAlphaNum 40) (ne $old "") }}
+{{- end }}
+{{- $_ := set $keys $user $key }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $fn }}-apikey-{{ $user }}
+  namespace: {{ $ak.namespace }}
+  labels:
+    {{- include "platform-probe.labels" $ | nindent 4 }}
+    authorino.kuadrant.io/managed-by: authorino
+    platform-probe/api: {{ include "platform-probe.apiKeySelector" $ }}
+  annotations:
+    secret.kuadrant.io/user-id: {{ $user }}
+    secret.kuadrant.io/plan-id: {{ (get $users $user).plan }}
+    platform-probe/groups: {{ (get $users $user).groups | quote }}
+type: Opaque
+stringData:
+  api_key: {{ $key | quote }}
+{{- end }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $fn }}-apikeys
+  labels:
+    {{- include "platform-probe.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  {{- range $user, $key := $keys }}
+  {{ $user }}: {{ $key | quote }}
+  {{- end }}
+{{- end }}

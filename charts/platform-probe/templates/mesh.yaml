@@ -1,0 +1,347 @@
+{{- $fn := include "platform-probe.fullname" . }}
+{{- $ns := .Release.Namespace }}
+{{- $m := .Values.mesh }}
+{{- $p := dict
+  "gateway" (include "platform-probe.principal" (dict "ctx" . "namespace" .Values.gateway.namespace "sa" (include "platform-probe.gatewaySA" .)))
+  "frontend" (include "platform-probe.principal" (dict "ctx" . "namespace" $ns "sa" (include "platform-probe.sa" (dict "ctx" . "role" "frontend"))))
+  "catalog" (include "platform-probe.principal" (dict "ctx" . "namespace" $ns "sa" (include "platform-probe.sa" (dict "ctx" . "role" "catalog"))))
+  "console" (include "platform-probe.principal" (dict "ctx" . "namespace" $ns "sa" (include "platform-probe.sa" (dict "ctx" . "role" "console"))))
+}}
+{{- if $m.strictMTLS }}
+# STRICT for the demo services only, whatever the mesh-wide default is.
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: {{ $fn }}-strict
+  labels:
+    {{- include "platform-probe.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "platform-probe.selectorLabels" . | nindent 6 }}
+      platform-probe/mtls: strict
+  mtls:
+    mode: STRICT
+---
+{{- end }}
+{{- $gwHost := .Values.gateway.address | default (printf "%s-istio.%s.svc.cluster.local" .Values.gateway.name .Values.gateway.namespace) }}
+{{- if not (regexMatch "^[0-9.]+$|:" $gwHost) }}
+# The redirect check sends plain HTTP to the gateway's port 80. Once the VirtualService below
+# routes it through the mesh, the console's sidecar would wrap it in mesh mTLS (the gateway's
+# pods count as mTLS-capable), and the plaintext listener would reject it with a 502.
+# Visible to this namespace only, so other workloads' traffic to the gateway is unchanged.
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: {{ $fn }}-gateway-http
+  labels:
+    {{- include "platform-probe.labels" . | nindent 4 }}
+spec:
+  host: {{ $gwHost }}
+  exportTo:
+    - "."
+  trafficPolicy:
+    portLevelSettings:
+      - port:
+          number: {{ int .Values.gateway.httpPort }}
+        tls:
+          mode: DISABLE
+---
+# The sidecar routes plain HTTP by Host header, and the redirect check's Host is the probe's
+# hostname, which isn't in the mesh's registry. With mesh.egress.registryOnly the sidecar
+# answers 502 for it before the request leaves the pod. This names the gateway's Service as
+# that hostname's destination on the HTTP port. (HTTPS is routed by the Service's IP instead,
+# so it needs nothing.)
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: {{ $fn }}-gateway-http
+  labels:
+    {{- include "platform-probe.labels" . | nindent 4 }}
+spec:
+  hosts:
+    - {{ .Values.gateway.hostname | quote }}
+  exportTo:
+    - "."
+  http:
+    - route:
+        - destination:
+            host: {{ $gwHost }}
+            port:
+              number: {{ int .Values.gateway.httpPort }}
+---
+{{- end }}
+# The console also answers `helm test`, whose pod has no sidecar, so it accepts plaintext.
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: {{ $fn }}-console
+  labels:
+    {{- include "platform-probe.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "platform-probe.componentSelector" (dict "ctx" . "component" "console") | nindent 6 }}
+  mtls:
+    mode: PERMISSIVE
+{{- if $m.authorizationPolicies }}
+---
+# frontend: only the gateway and the console.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ $fn }}-frontend
+  labels:
+    {{- include "platform-probe.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "platform-probe.componentSelector" (dict "ctx" . "component" "frontend") | nindent 6 }}
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: [{{ $p.gateway | quote }}, {{ $p.console | quote }}]
+---
+# catalog: the gateway (/split, /mirror) and frontend. The console only for /seen, so its own
+# direct call is what the AuthorizationPolicy check expects to be denied.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ $fn }}-catalog
+  labels:
+    {{- include "platform-probe.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "platform-probe.roleSelector" (dict "ctx" . "role" "catalog") | nindent 6 }}
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: [{{ $p.gateway | quote }}, {{ $p.frontend | quote }}]
+    - from:
+        - source:
+            principals: [{{ $p.console | quote }}]
+      to:
+        - operation:
+            methods: ["GET"]
+            paths: ["/seen", "/healthz"]
+---
+# pricing (both pools): only catalog.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ $fn }}-pricing
+  labels:
+    {{- include "platform-probe.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "platform-probe.roleSelector" (dict "ctx" . "role" "pricing") | nindent 6 }}
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: [{{ $p.catalog | quote }}]
+{{- end }}
+{{- if $m.trafficManagement }}
+---
+# East-west split frontend → catalog, and header routing to v2.
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: {{ $fn }}-catalog
+  labels:
+    {{- include "platform-probe.labels" . | nindent 4 }}
+spec:
+  hosts:
+    - {{ $fn }}-catalog
+  http:
+    - match:
+        - headers:
+            x-version:
+              exact: v2
+      route:
+        - destination:
+            host: {{ $fn }}-catalog
+            subset: v2
+    - route:
+        - destination:
+            host: {{ $fn }}-catalog
+            subset: v1
+          weight: {{ sub 100 (int $m.splitV2Percent) }}
+        - destination:
+            host: {{ $fn }}-catalog
+            subset: v2
+          weight: {{ int $m.splitV2Percent }}
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: {{ $fn }}-catalog
+  labels:
+    {{- include "platform-probe.labels" . | nindent 4 }}
+spec:
+  host: {{ $fn }}-catalog
+  subsets:
+    - name: v1
+      labels:
+        version: v1
+    - name: v2
+      labels:
+        version: v2
+---
+# catalog → pricing, one route per scenario the checks select with x-probe-scenario.
+# The default route doesn't retry, so failures the checks inject stay visible.
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: {{ $fn }}-pricing
+  labels:
+    {{- include "platform-probe.labels" . | nindent 4 }}
+spec:
+  hosts:
+    - {{ $fn }}-pricing
+  http:
+    - name: retry
+      match:
+        - headers:
+            x-probe-scenario:
+              exact: retry
+      retries:
+        attempts: 8
+        perTryTimeout: 2s
+        retryOn: 5xx
+      route:
+        - destination:
+            host: {{ $fn }}-pricing
+    - name: fault-abort
+      match:
+        - headers:
+            x-probe-scenario:
+              exact: fault-abort
+      fault:
+        abort:
+          percentage:
+            value: 50
+          httpStatus: 503
+      retries:
+        attempts: 0
+      route:
+        - destination:
+            host: {{ $fn }}-pricing
+    - name: fault-delay
+      match:
+        - headers:
+            x-probe-scenario:
+              exact: fault-delay
+      fault:
+        delay:
+          percentage:
+            value: 100
+          fixedDelay: 1s
+      route:
+        - destination:
+            host: {{ $fn }}-pricing
+    - name: timeout
+      match:
+        - headers:
+            x-probe-scenario:
+              exact: timeout
+      timeout: 1s
+      retries:
+        attempts: 0
+      route:
+        - destination:
+            host: {{ $fn }}-pricing
+    - name: default
+      retries:
+        attempts: 0
+      route:
+        - destination:
+            host: {{ $fn }}-pricing
+---
+# The pool with the faulty pod: eject a pod after 3 errors in a row.
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: {{ $fn }}-pricing-pool
+  labels:
+    {{- include "platform-probe.labels" . | nindent 4 }}
+spec:
+  host: {{ $fn }}-pricing-pool
+  trafficPolicy:
+    loadBalancer:
+      simple: ROUND_ROBIN
+    outlierDetection:
+      consecutive5xxErrors: 3
+      interval: 1s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 100
+---
+# No retries into the pool, so each failure reaches the caller and counts towards ejection.
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: {{ $fn }}-pricing-pool
+  labels:
+    {{- include "platform-probe.labels" . | nindent 4 }}
+spec:
+  hosts:
+    - {{ $fn }}-pricing-pool
+  http:
+    - retries:
+        attempts: 0
+      route:
+        - destination:
+            host: {{ $fn }}-pricing-pool
+{{- end }}
+{{- with $m.egress }}
+{{- if .registryOnly }}
+---
+# The console may only reach hosts in the mesh's registry: in-cluster Services and ServiceEntries.
+apiVersion: networking.istio.io/v1
+kind: Sidecar
+metadata:
+  name: {{ $fn }}-console
+  labels:
+    {{- include "platform-probe.labels" $ | nindent 4 }}
+spec:
+  workloadSelector:
+    labels:
+      {{- include "platform-probe.componentSelector" (dict "ctx" $ "component" "console") | nindent 6 }}
+  outboundTrafficPolicy:
+    mode: REGISTRY_ONLY
+  egress:
+    - hosts: ["*/*"]
+{{- $hosts := .allowedHosts }}
+{{- if $.Values.auth.oidc.enabled }}
+{{- $issuer := urlParse $.Values.auth.oidc.issuerUrl }}
+{{- $hosts = append $hosts (regexReplaceAll ":[0-9]+$" $issuer.host "") }}
+{{- end }}
+{{- range $i, $host := $hosts | uniq }}
+---
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: {{ $fn }}-egress-{{ $i }}
+  labels:
+    {{- include "platform-probe.labels" $ | nindent 4 }}
+spec:
+  hosts:
+    - {{ $host | quote }}
+  exportTo: ["."]
+  location: MESH_EXTERNAL
+  # NONE: the sidecar forwards to the address the console resolved, and still lets only this
+  # host's TLS server name through. With DNS, the sidecar resolves the name itself, and where
+  # that fails (search domains, /etc/hosts, IPv6-only answers) it has no endpoint and resets
+  # the connection even though the console resolves the name fine.
+  resolution: NONE
+  ports:
+    - number: 443
+      name: https
+      protocol: TLS
+{{- end }}
+{{- end }}
+{{- end }}

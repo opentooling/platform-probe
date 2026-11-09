@@ -1,0 +1,77 @@
+{{- $fn := include "platform-probe.fullname" . }}
+{{- $u := dict "ctx" . }}
+{{- $sa := dict "ctx" . }}
+{{- $v := .Values }}
+{{- /* Everything the console needs to know, from these values only. Read by platform_probe/config.py, which rejects keys it does not know. */}}
+{{- $config := dict
+  "release" .Release.Name
+  "namespace" .Release.Namespace
+  "trustDomain" $v.trustDomain
+  "gateway" (dict
+    "name" $v.gateway.name
+    "namespace" $v.gateway.namespace
+    "serviceAccount" (include "platform-probe.gatewaySA" .)
+    "host" $v.gateway.hostname
+    "address" $v.gateway.address
+    "httpPort" (int $v.gateway.httpPort)
+    "httpsPort" (int $v.gateway.httpsPort)
+    "issuerContains" $v.gateway.tls.issuerContains
+    "insecureSkipVerify" $v.gateway.tls.insecureSkipVerify)
+  "kuadrant" (dict "namespace" $v.kuadrant.namespace)
+  "services" (dict
+    "frontend" (include "platform-probe.url" (dict "ctx" . "svc" "frontend"))
+    "catalog" (include "platform-probe.url" (dict "ctx" . "svc" "catalog"))
+    "catalogV1" (include "platform-probe.url" (dict "ctx" . "svc" "catalog-v1"))
+    "catalogV2" (include "platform-probe.url" (dict "ctx" . "svc" "catalog-v2"))
+    "outsider" (include "platform-probe.url" (dict "ctx" . "svc" "outsider")))
+  "serviceAccounts" (dict
+    "frontend" (include "platform-probe.sa" (dict "ctx" . "role" "frontend"))
+    "catalog" (include "platform-probe.sa" (dict "ctx" . "role" "catalog"))
+    "pricing" (include "platform-probe.sa" (dict "ctx" . "role" "pricing"))
+    "console" (include "platform-probe.sa" (dict "ctx" . "role" "console")))
+  "expect" (dict
+    "defaultDeny" $v.expect.defaultDeny
+    "httpRedirect" $v.expect.httpRedirect
+    "strictMTLS" $v.mesh.strictMTLS
+    "authorizationPolicies" $v.mesh.authorizationPolicies
+    "trafficManagement" $v.mesh.trafficManagement
+    "networkPolicies" $v.networkPolicies.enabled)
+  "limits" (dict
+    "public" $v.rateLimits.public
+    "free" $v.rateLimits.plans.free
+    "gold" $v.rateLimits.plans.gold)
+  "routes" (dict "splitV2Percent" (int $v.routes.splitV2Percent) "timeout" $v.routes.timeout)
+  "mesh" (dict "splitV2Percent" (int $v.mesh.splitV2Percent))
+  "egress" (dict
+    "registryOnly" $v.mesh.egress.registryOnly
+    "blockedUrl" $v.mesh.egress.blockedUrl
+    "allowedUrl" $v.mesh.egress.allowedUrl)
+  "apiKeys" (dict "prefix" $v.auth.apiKeys.prefix "dir" "/etc/platform-probe/apikeys")
+  "oidc" (dict
+    "enabled" $v.auth.oidc.enabled
+    "issuerUrl" $v.auth.oidc.issuerUrl
+    "clientId" $v.auth.oidc.clientId
+    "scope" $v.auth.oidc.scope
+    "clientSecretFile" "/etc/platform-probe/oidc/client-secret")
+  "caFile" (ternary "/etc/platform-probe/ca/ca-bundle.crt" "" (ne (include "platform-probe.caConfigMap" .) ""))
+}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fn }}-config
+  labels:
+    {{- include "platform-probe.labels" . | nindent 4 }}
+data:
+  config.json: |
+    {{- $config | toPrettyJson | nindent 4 }}
+{{- if and .Values.trustedCA.openshiftInjected (not .Values.trustedCA.configMap) }}
+---
+# OpenShift fills ca-bundle.crt with the cluster trust bundle. Leave data empty.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fn }}-ca-bundle
+  labels:
+    {{- include "platform-probe.labels" . | nindent 4 }}
+    config.openshift.io/inject-trusted-cabundle: "true"
+{{- end }}

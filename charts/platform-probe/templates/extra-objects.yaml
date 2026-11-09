@@ -1,0 +1,48 @@
+{{- /*
+Extra manifests from values (e.g. custom resources, ExternalSecrets for the API keys, an OpenShift Route for the console, extra policies).
+Each item is either a YAML object or a string; both are rendered with `tpl`, so they
+can use template expressions such as {{ include "platform-probe.fullname" $ }}.
+
+An item can instead be wrapped as {when, object} to render only on a condition,
+such as a feature flag: `when` is true or false, or a template string rendered
+against the release, which counts as false when it comes out empty, "false",
+"0", "no", "off" or "null". `when` is optional; without it the object always
+renders, so a block can wrap every item alike. `object` is the item itself, in
+either form.
+*/}}
+{{- $falsy := list "" "false" "0" "no" "off" "null" "<nil>" }}
+{{- range $index, $item := .Values.extraObjects }}
+{{- $object := $item }}
+{{- $render := true }}
+{{- /* A wrapper, not a manifest: a manifest always names its apiVersion. */}}
+{{- $wrapped := false }}
+{{- if kindIs "map" $item }}
+{{- $wrapped = and (hasKey $item "object") (not (hasKey $item "apiVersion")) }}
+{{- end }}
+{{- if $wrapped }}
+{{- range $key := keys $item }}
+{{- if not (has $key (list "when" "object")) }}
+{{- fail (printf "extraObjects[%d] has %q; a conditional item takes only when and object" $index $key) }}
+{{- end }}
+{{- end }}
+{{- $object = get $item "object" }}
+{{- if hasKey $item "when" }}
+{{- $when := get $item "when" }}
+{{- if kindIs "bool" $when }}
+{{- $render = $when }}
+{{- else if kindIs "string" $when }}
+{{- $render = not (has (tpl $when $ | trim | lower) $falsy) }}
+{{- else }}
+{{- fail (printf "extraObjects[%d].when must be true, false or a template string such as \"{{ .Values.features.x }}\"" $index) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if $render }}
+---
+{{- if typeIs "string" $object }}
+{{ tpl $object $ }}
+{{- else }}
+{{ tpl (toYaml $object) $ }}
+{{- end }}
+{{- end }}
+{{- end }}

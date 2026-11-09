@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>platform-probe</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z' fill='%23185fa5'/%3E%3Cpath d='M8.5 12l2.5 2.5 4.5-5' stroke='white' stroke-width='2' fill='none'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <header class="top">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/><path class="tick" d="M8.5 12l2.5 2.5 4.5-5"/></svg>
+      <div>
+        <h1>platform-probe</h1>
+        <p class="mono muted" id="target">Loading…</p>
+      </div>
+    </div>
+    <div class="actions">
+      <a class="button" href="api/report.junit" id="junit">Download JUnit</a>
+      <button class="primary" id="run">Run all</button>
+    </div>
+  </header>
+
+  <section class="metrics" aria-label="Summary">
+    <div class="metric"><span>Passed</span><strong class="ok" id="m-pass">–</strong></div>
+    <div class="metric"><span>Failed</span><strong class="bad" id="m-fail">–</strong></div>
+    <div class="metric"><span>Skipped</span><strong class="warn" id="m-skip">–</strong></div>
+    <div class="metric"><span id="m-time-label">Last run</span><strong id="m-time">–</strong></div>
+  </section>
+
+  <section class="card topo" aria-label="Demo topology">
+    <p class="muted small">Demo topology: one image, four roles. Every hop is mutual TLS and reports its caller, version, attempt count and request ID.</p>
+    <div class="flow">
+      <div class="node">Gateway<span class="mono">TLS · auth · limits</span></div>
+      <span class="arrow" aria-hidden="true">→</span>
+      <div class="node">frontend<span class="mono">HTTPRoute</span></div>
+      <span class="arrow" aria-hidden="true">→</span>
+      <div class="stack">
+        <div class="node">catalog v1<span class="mono" id="t-v1">90%</span></div>
+        <div class="node">catalog v2<span class="mono" id="t-v2">10% · x-version</span></div>
+      </div>
+      <span class="arrow" aria-hidden="true">→</span>
+      <div class="stack">
+        <div class="node">pricing<span class="mono">retries · faults</span></div>
+        <div class="node">pricing (faulty)<span class="mono">outlier pool</span></div>
+      </div>
+    </div>
+  </section>
+
+  <div class="groups" id="groups"></div>
+
+  <section class="card" aria-labelledby="exp-title">
+    <h2 id="exp-title">Experiments</h2>
+    <div class="chips-row" id="exp-list" role="tablist"></div>
+    <p id="exp-desc"></p>
+    <p class="mono muted" id="exp-config"></p>
+    <div class="exp-controls">
+      <label for="exp-n">Requests <output id="exp-n-out">20</output></label>
+      <input type="range" id="exp-n" min="1" max="60" step="1" value="20">
+      <button id="exp-go">Send</button>
+    </div>
+    <div class="samples" id="exp-samples" aria-live="polite"></div>
+    <p id="exp-summary"></p>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,200 @@
+# platform-probe: a demo app (frontend → catalog v1/v2 → pricing) plus a console that sends traffic
+# through your API gateway and between the services, and reports which features work.
+#
+# Install it into its own namespace. The namespace needs the label your gateway uses to accept
+# routes (api-gateway-access=true on the RHCL platform):
+#   oc new-project platform-probe && oc label namespace platform-probe api-gateway-access=true
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: ghcr.io/opentooling/platform-probe
+  # Empty = the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# The Gateway the probe's routes attach to, and how the console reaches it.
+gateway:
+  name: api-gateway
+  namespace: api-gateway
+  # Listener to attach to.
+  sectionName: https
+  # Hostname of the probe's routes. It must fall under the listener's hostname. No DNS record
+  # is needed: the console dials the gateway's address directly.
+  hostname: probe.api.example.internal
+  # Where the console connects for that hostname. Empty = the gateway's Service,
+  # <name>-istio.<namespace>.svc. With mesh.egress.registryOnly, an IP here is blocked.
+  address: ""
+  httpPort: 80
+  httpsPort: 443
+  # ServiceAccount of the gateway's pods, whose SPIFFE ID the apps expect. Empty = <name>-istio.
+  serviceAccount: ""
+  tls:
+    # If set, the gateway certificate's issuer must contain this, e.g. "internal-ca".
+    issuerContains: ""
+    # Skip certificate verification. The TLS check then only reports the issuer.
+    insecureSkipVerify: false
+
+# Namespace of the Kuadrant CR (and of Authorino).
+kuadrant:
+  namespace: kuadrant-system
+
+# What the platform itself is expected to enforce. A check for something switched off here is
+# reported as skipped, not failed.
+expect:
+  # A deny-all AuthPolicy on the gateway: routes without their own AuthPolicy get 403.
+  defaultDeny: true
+  # An HTTP→HTTPS redirect on the gateway's port 80.
+  httpRedirect: true
+
+# The mesh's trust domain, used in SPIFFE IDs and AuthorizationPolicy principals.
+trustDomain: cluster.local
+
+# CA bundle the console trusts, to verify the gateway's certificate and the IdP's.
+trustedCA:
+  # A ConfigMap that OpenShift fills with the cluster trust bundle (public CAs + the proxy's
+  # trustedCA). On other clusters it stays empty and only the system CAs are trusted.
+  openshiftInjected: true
+  # Or your own ConfigMap in the release namespace. Takes precedence over openshiftInjected.
+  configMap: ""
+  key: ca-bundle.crt
+
+auth:
+  # Two API-key callers, which the checks rely on:
+  #   alice: plan gold, group admin (may POST)
+  #   bob:   plan free, no group     (may not POST, limited to rateLimits.plans.free)
+  apiKeys:
+    # Where Authorino reads API-key Secrets from.
+    namespace: kuadrant-system
+    # Header format: "Authorization: APIKEY <key>".
+    prefix: APIKEY
+    # Create the key Secrets. Turn off to bring your own, e.g. ExternalSecrets from Vault in
+    # extraObjects (see examples/). You then provide:
+    #   - one Secret per user in auth.apiKeys.namespace, with the api_key field, the labels
+    #     authorino.kuadrant.io/managed-by: authorino and
+    #     platform-probe/api: {{ include "platform-probe.apiKeySelector" $ }}, and the annotations
+    #     secret.kuadrant.io/user-id, secret.kuadrant.io/plan-id and platform-probe/groups
+    #   - <fullname>-apikeys in the release namespace, with the fields alice and bob, which
+    #     the console reads
+    create: true
+    # With create: leave empty to generate keys on install and keep them on upgrade. Under
+    # Argo CD, which renders without cluster access, set them, or they change on every sync.
+    alice: ""
+    bob: ""
+
+  # Also accept OIDC access tokens. The console gets one with the client credentials grant.
+  oidc:
+    enabled: false
+    issuerUrl: ""
+    clientId: ""
+    scope: ""
+    clientSecret:
+      # Secret in the release namespace holding the client secret.
+      existingSecret: ""
+      key: client-secret
+
+rateLimits:
+  # The public route, shared by everyone.
+  public:
+    limit: 5
+    window: 10s
+  # Per caller on the protected routes. The checks send dozens of requests as alice, so keep
+  # gold high; bob's free limit is the one the checks exceed on purpose.
+  plans:
+    free:
+      limit: 3
+      window: 10s
+    gold:
+      limit: 300
+      window: 10s
+  total:
+    limit: 1000
+    window: 10s
+
+# Gateway features.
+routes:
+  # Share of /split the gateway sends to catalog v2.
+  splitV2Percent: 10
+  # Request timeout on /timeout.
+  timeout: 2s
+
+mesh:
+  # Sidecar injection. Empty = the label sidecar.istio.io/inject: "true", which the default
+  # revision (an Istio CR named "default") honours. Set a revision name to use istio.io/rev.
+  revision: ""
+  # STRICT mTLS for the demo services: a PeerAuthentication on their pods.
+  strictMTLS: true
+  # AuthorizationPolicies: only the gateway and frontend may call catalog, only catalog may
+  # call pricing.
+  authorizationPolicies: true
+  # VirtualServices and DestinationRules for the east-west split, retries, fault injection,
+  # timeouts and outlier detection.
+  trafficManagement: true
+  # Share of frontend → catalog calls the mesh sends to catalog v2.
+  splitV2Percent: 10
+  egress:
+    # Limit the console to hosts in the mesh's registry (a Sidecar with REGISTRY_ONLY).
+    registryOnly: true
+    # Must be refused (502 from the sidecar). Nothing needs to answer on it.
+    blockedUrl: http://example.com/
+    # External hosts the console may reach (a ServiceEntry each, HTTPS on 443). The OIDC
+    # issuer's host is added automatically.
+    allowedHosts: []
+    # Optional URL on one of allowedHosts, to check it is reachable.
+    allowedUrl: ""
+
+# Ingress NetworkPolicies: only the gateway reaches frontend; each service accepts only its
+# callers. The checks call frontend from a pod outside the mesh and expect a timeout.
+networkPolicies:
+  enabled: true
+
+# Python services use about 30Mi each, the console about 35Mi.
+resources:
+  requests:
+    cpu: 10m
+    memory: 40Mi
+  limits:
+    cpu: 200m
+    memory: 96Mi
+consoleResources:
+  requests:
+    cpu: 20m
+    memory: 48Mi
+  limits:
+    cpu: 500m
+    memory: 192Mi
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# `helm test` runs the whole suite and fails if any check fails.
+tests:
+  enabled: true
+
+# -- Extra Kubernetes objects to deploy with the release: ExternalSecrets for the API keys, an
+# OpenShift Route for the console, policies of your own. Items can be YAML objects or strings;
+# both are rendered with `tpl`, so expressions such as {{ include "platform-probe.fullname" $ }}
+# and {{ .Release.Namespace }} work. Any CRDs must already exist in the cluster.
+# To render an item only on a condition, such as a feature flag of your own, wrap it as
+# {when, object}: `when` is true, false, or a template string that counts as false when it
+# renders empty, "false", "0", "no", "off" or "null". `when` is optional: {object} alone
+# always renders.
+#   features:
+#     consoleRoute: true
+#   extraObjects:
+#     - when: "{{ .Values.features.consoleRoute }}"
+#       object:
+#         apiVersion: route.openshift.io/v1
+#         kind: Route
+#         metadata:
+#           name: '{{ include "platform-probe.fullname" $ }}-console'
+#         spec:
+#           to: { kind: Service, name: '{{ include "platform-probe.fullname" $ }}-console' }
+#           port: { targetPort: http }
+#           tls: { termination: edge }
+# Avoid on, off, yes and no as flag names: YAML reads those keys as booleans.
+extraObjects: []
