@@ -38,7 +38,7 @@ Platform suites, when switched on ([details](#platform-suites)):
 | Group | Checks |
 |---|---|
 | Ingress & certificates | default IngressController available · edge Route with a trusted certificate that isn't about to expire, HTTP redirected to HTTPS · reencrypt Route to a service-CA certificate · passthrough Route ends TLS at the pod · cert-manager issues a certificate |
-| Workload security | a tenant pod gets the expected SCC and a UID from the namespace's range · privileged, root, hostPath and hostNetwork pods refused · ResourceQuota refuses a pod over quota · LimitRange sets default requests and limits |
+| Workload security | a tenant pod gets the expected SCC and a UID from the namespace's range · privileged, root, hostPath and hostNetwork pods refused · ResourceQuota refuses a pod over quota · a ClusterResourceQuota covers the namespace and refuses a pod over it · LimitRange sets defaults and refuses a container over its max |
 | Storage | exactly one default StorageClass · for each StorageClass: a PVC binds and data written by one pod is read by another · expansion · snapshot restored to a new PVC with the data |
 | Observability | a pod's log line reaches Loki · its metric reaches Mimir (scraped or pushed over OTLP) · its span reaches Tempo; each with the time it took |
 
@@ -184,7 +184,17 @@ through their termination message. With a private registry, put the pull secrets
 ConfigMap there as well: the ingress checks trust the router's certificate through it.
 
 Rejections (privileged pods, a pod over quota) are tested with server-side dry runs, so
-admission runs in full and nothing is created.
+admission runs in full and nothing is created. A quota is tested with a pod that asks for just
+more than the room the quota has left, and no more than the LimitRange allows a container:
+LimitRange admission runs first, so a bigger pod would be refused by the LimitRange and prove
+nothing about the quota. When the room left is more than a container may ask for, the check is
+skipped and says so.
+
+ClusterResourceQuotas (OpenShift) select namespaces by label or annotation, often the
+requester's. The check reads the ones that apply to the scratch namespace
+(AppliedClusterResourceQuota); give the namespace what your quotas select with
+`scratch.labels` / `scratch.annotations`, or create it with `oc new-project` as a team member.
+Set `suites.workloads.expectClusterQuota: true` to fail rather than skip when none applies.
 
 The storage checks run pods one after another and wait for volumes to attach, which takes
 minutes. Give `helm test` the time:

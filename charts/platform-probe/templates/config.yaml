@@ -72,6 +72,7 @@
       "enabled" $v.suites.workloads.enabled
       "expectedScc" $v.suites.workloads.expectedScc
       "expectQuota" $v.suites.workloads.expectQuota
+      "expectClusterQuota" $v.suites.workloads.expectClusterQuota
       "expectLimitRange" $v.suites.workloads.expectLimitRange)
     "storage" (dict
       "enabled" $v.suites.storage.enabled

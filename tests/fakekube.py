@@ -46,6 +46,7 @@ class FakeKube:
             "limitranges",
             "storageclasses",
             "namespaces",
+            "appliedclusterresourcequotas",
         }
     )
 

@@ -172,6 +172,7 @@ class WorkloadsSuite:
     expected_scc: str = "restricted-v2"
     # Fail, rather than skip, when the scratch namespace has no ResourceQuota / LimitRange.
     expect_quota: bool = False
+    expect_cluster_quota: bool = False
     expect_limit_range: bool = False
 
 

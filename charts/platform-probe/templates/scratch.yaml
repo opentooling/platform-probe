@@ -51,6 +51,10 @@ rules:
   - apiGroups: [""]
     resources: ["resourcequotas", "limitranges"]
     verbs: ["list"]
+  # The ClusterResourceQuotas that cover the scratch namespace (OpenShift).
+  - apiGroups: ["quota.openshift.io"]
+    resources: ["appliedclusterresourcequotas"]
+    verbs: ["list"]
   {{- end }}
   {{- if .Values.suites.storage.enabled }}
   # PVCs, patched to test expansion, and snapshots of them.

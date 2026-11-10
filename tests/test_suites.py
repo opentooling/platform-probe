@@ -159,32 +159,122 @@ def test_workloads_privileged_admitted_fails(tmp_path):
     assert out.status == Status.FAIL and "privileged, root, hostPath, hostNetwork" in out.detail, out
 
 
-def test_quota_and_limit_range(tmp_path):
+Q = scratch.parse_quantity
+
+
+class Admission:
+    """LimitRange, then quota admission, as the API server applies them to a pod."""
+
+    def __init__(self, max_=None, defaults=None, quotas=()):
+        self.max = max_ or {}  # resource -> per-container max
+        self.defaults = defaults  # resources for a container without any
+        self.quotas = list(quotas)  # (name, hard, used)
+
+    def __call__(self, pod):
+        refuse_unsafe(pod)
+        c = pod["spec"]["containers"][0]
+        res = c.get("resources") or {}
+        if not res and self.defaults:
+            c["resources"] = res = self.defaults
+        for kind in ("requests", "limits"):
+            for r, v in (res.get(kind) or {}).items():
+                if r in self.max and Q(v) > Q(self.max[r]):
+                    raise StatusError(403, f"maximum {r} usage per Container is {self.max[r]}, but {kind[:-1]} is {v}")
+        for name, hard, used in self.quotas:
+            for key, h in hard.items():
+                kind, r = workloads.QUOTA_KEYS[key]
+                ask = Q((res.get(kind) or {}).get(r, "0"))
+                if Q(used.get(key, "0")) + ask > Q(h):
+                    raise StatusError(
+                        403, f"exceeded quota: {name}, requested: {key}={ask}, used: {used.get(key)}, limited: {h}"
+                    )
+
+
+def test_quota_sized_past_the_room_left(tmp_path):
     fake = FakeKube(tmp_path)
     p = make_probe(fake, workloads={"enabled": True})
     assert go(p, workloads.check_quota).status == Status.SKIP
-    assert go(p, workloads.check_limit_range).status == Status.SKIP
     p.cfg.suites.workloads.expect_quota = True
     assert go(p, workloads.check_quota).status == Status.FAIL
 
+    hard, used = {"requests.cpu": "4", "limits.memory": "8Gi"}, {"requests.cpu": "3500m", "limits.memory": "1Gi"}
     fake.put(
         f"/api/v1/namespaces/{NS}/resourcequotas",
-        {"metadata": {"name": "compute"}, "spec": {"hard": {"requests.cpu": "4"}}},
+        {"metadata": {"name": "compute"}, "status": {"hard": hard, "used": used}},
     )
-    fake.put(f"/api/v1/namespaces/{NS}/limitranges", {"metadata": {"name": "defaults"}})
-
-    def admission(pod):
-        res = pod["spec"]["containers"][0].get("resources") or {}
-        if (res.get("requests") or {}).get("cpu") == "100000":
-            raise StatusError(403, "exceeded quota: compute, requested: requests.cpu=100k")
-        if not res:
-            pod["spec"]["containers"][0]["resources"] = {"requests": {"cpu": "100m"}, "limits": {"memory": "512Mi"}}
-
-    fake.admit = admission
+    # A LimitRange max of 2 CPUs: the old 100000-CPU pod was refused by it, not by the quota.
+    fake.put(
+        f"/api/v1/namespaces/{NS}/limitranges",
+        {"metadata": {"name": "lr"}, "spec": {"limits": [{"type": "Container", "max": {"cpu": "2"}}]}},
+    )
+    fake.admit = Admission(max_={"cpu": "2"}, quotas=[("compute", hard, used)])
     out = go(p, workloads.check_quota)
-    assert out.status == Status.PASS and "exceeded quota" in out.detail, out
+    assert out.status == Status.PASS and "requests.cpu 600m with 500m left" in out.detail, out
+
+    # Quota not enforced: the pod sized to exceed it is admitted.
+    fake.admit = Admission(max_={"cpu": "2"})
+    assert go(p, workloads.check_quota).status == Status.FAIL
+
+
+def test_quota_room_bigger_than_a_container_may_ask(tmp_path):
+    fake = FakeKube(tmp_path)
+    p = make_probe(fake, workloads={"enabled": True})
+    fake.put(
+        f"/api/v1/namespaces/{NS}/resourcequotas",
+        {"metadata": {"name": "big"}, "status": {"hard": {"cpu": "100"}, "used": {}}},
+    )
+    fake.put(
+        f"/api/v1/namespaces/{NS}/limitranges",
+        {"metadata": {"name": "lr"}, "spec": {"limits": [{"type": "Container", "max": {"cpu": "2"}}]}},
+    )
+    out = go(p, workloads.check_quota)
+    assert out.status == Status.SKIP and "more than a container may ask for (2000m)" in out.detail, out
+
+
+def test_cluster_quota(tmp_path):
+    fake = FakeKube(tmp_path)
+    p = make_probe(fake, workloads={"enabled": True})
+    out = go(p, workloads.check_cluster_quota)
+    assert out.status == Status.SKIP and "no ClusterResourceQuota selects" in out.detail, out
+    p.cfg.suites.workloads.expect_cluster_quota = True
+    out = go(p, workloads.check_cluster_quota)
+    assert out.status == Status.FAIL and "scratch.labels" in out.hint, out
+
+    hard, used = {"requests.memory": "20Gi"}, {"requests.memory": "19Gi"}
+    fake.put(
+        f"/apis/quota.openshift.io/v1/namespaces/{NS}/appliedclusterresourcequotas",
+        {
+            "metadata": {"name": "team-a"},
+            "spec": {"quota": {"hard": hard}},
+            "status": {"total": {"hard": hard, "used": used}},
+        },
+    )
+    fake.admit = Admission(quotas=[("team-a", hard, used)])
+    out = go(p, workloads.check_cluster_quota)
+    assert out.status == Status.PASS and "covered by team-a" in out.detail and "requests.memory 1088Mi" in out.detail, (
+        out
+    )
+
+    fake.admit = Admission()
+    out = go(p, workloads.check_cluster_quota)
+    assert out.status == Status.FAIL and "admitted" in out.detail, out
+
+
+def test_limit_range_defaults_and_max(tmp_path):
+    fake = FakeKube(tmp_path)
+    p = make_probe(fake, workloads={"enabled": True})
+    assert go(p, workloads.check_limit_range).status == Status.SKIP
+    lr = {"metadata": {"name": "defaults"}, "spec": {"limits": [{"type": "Container", "max": {"memory": "1Gi"}}]}}
+    fake.put(f"/api/v1/namespaces/{NS}/limitranges", lr)
+    defaults = {"requests": {"cpu": "100m"}, "limits": {"memory": "512Mi"}}
+    fake.admit = Admission(max_={"memory": "1Gi"}, defaults=defaults)
     out = go(p, workloads.check_limit_range)
-    assert out.status == Status.PASS and "requests cpu=100m" in out.detail and "limits memory=512Mi" in out.detail, out
+    assert out.status == Status.PASS, out
+    assert "requests cpu=100m" in out.detail and "memory 1088Mi was refused (max 1024Mi)" in out.detail, out
+
+    fake.admit = Admission(defaults=defaults)  # the max isn't enforced
+    out = go(p, workloads.check_limit_range)
+    assert out.status == Status.FAIL and "admitted, over the LimitRange max" in out.detail, out
 
 
 # --- storage -------------------------------------------------------------------------------------

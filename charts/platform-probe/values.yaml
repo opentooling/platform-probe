@@ -191,8 +191,11 @@ suites:
   workloads:
     enabled: false
     expectedScc: restricted-v2
-    # Fail, rather than skip, when the scratch namespace has no ResourceQuota / LimitRange.
+    # Fail, rather than skip, when the scratch namespace has no ResourceQuota, isn't covered by
+    # a ClusterResourceQuota (OpenShift: they select namespaces by label or annotation, see
+    # scratch.labels), or has no LimitRange.
     expectQuota: false
+    expectClusterQuota: false
     expectLimitRange: false
   # PVCs: provisioning, data kept between pods, expansion, snapshot and restore.
   storage:
