@@ -7,7 +7,8 @@ each feature reported as passed, failed or skipped, with a hint when it fails.
 The **connectivity** suite, always on, covers a **Red Hat Connectivity Link** API gateway and an
 **OpenShift Service Mesh 3**. Three **platform suites**, each switched on in the values, cover
 what else a team relies on: **ingress & certificates**, **workload security**, **storage** and
-**observability** (telemetry reaching a central Grafana, Loki, Mimir and Tempo stack).
+**observability** (telemetry reaching a central Grafana, Loki, Mimir and Tempo stack) and
+**Argo CD** (every instance up, its Applications healthy, teams able to deploy through it).
 See [Platform suites](#platform-suites), and [Adding checks](#adding-checks) for more.
 
 platform-probe started as [opentooling/rhcl-probe](https://github.com/opentooling/rhcl-probe),
@@ -40,6 +41,7 @@ Platform suites, when switched on ([details](#platform-suites)):
 | Ingress & certificates | default IngressController available · edge Route with a trusted certificate that isn't about to expire, HTTP redirected to HTTPS · reencrypt Route to a service-CA certificate · passthrough Route ends TLS at the pod · cert-manager issues a certificate |
 | Workload security | a tenant pod gets the expected SCC and a UID from the namespace's range · privileged, root, hostPath and hostNetwork pods refused · ResourceQuota refuses a pod over quota · a ClusterResourceQuota covers the namespace and refuses a pod over it · LimitRange sets defaults and refuses a container over its max |
 | Storage | exactly one default StorageClass · for each StorageClass: a PVC binds and data written by one pod is read by another · expansion · snapshot restored to a new PVC with the data |
+| Argo CD | each instance (e.g. platform and applications) available · its Applications synced and healthy, no failed syncs or repo errors · a test Application deploys through it into the scratch namespace and is pruned again |
 | Observability | a pod's log line reaches Loki · its metric reaches Mimir (scraped or pushed over OTLP) · its span reaches Tempo; each with the time it took |
 
 A feature you switch off in the values (OIDC, NetworkPolicies, the platform's default deny…) is
@@ -104,7 +106,7 @@ The values you are most likely to set:
 | `mesh.strictMTLS`, `.authorizationPolicies`, `.trafficManagement` | `true` | Mesh features to set up and check |
 | `mesh.egress.registryOnly` | `true` | Limit the console to the mesh registry |
 | `networkPolicies.enabled` | `true` | Ingress NetworkPolicies for the demo app |
-| `suites.ingress`, `.workloads`, `.storage`, `.observability` | off | [Platform suites](#platform-suites) to run |
+| `suites.ingress`, `.workloads`, `.storage`, `.observability`, `.argocd` | off | [Platform suites](#platform-suites) to run |
 | `scratch.namespace`, `scratch.create` | `<namespace>-scratch`, `true` | Where the platform suites create their test objects |
 | `scratch.labels`, `scratch.annotations` | `{}` | Labels and annotations for the scratch namespace the chart creates |
 | `extraObjects` | `[]` | Extra manifests, see below |
@@ -148,6 +150,38 @@ Loki, Mimir and Tempo, and reports how long it took. The label names are configu
 (`labels.namespace`, `labels.pod`), as are the pod annotations a scraping collector discovers
 (`metrics.podAnnotations`). With a multi-tenant stack, each data source sends this cluster's
 tenant ID, so the probe needs none. A failure names the query it ran, to paste into Explore.
+
+```yaml
+suites:
+  argocd:
+    enabled: true
+    instances:
+      - name: platform
+        namespace: openshift-gitops
+      - name: applications
+        namespace: gitops-apps
+        failOnOutOfSync: false          # teams' apps may drift on purpose
+        deploy:
+          enabled: true
+          repoURL: https://github.com/opentooling/platform-probe   # or your mirror
+          path: argocd/probe-app
+          revision: main
+scratch:
+  labels:
+    argocd.argoproj.io/managed-by: gitops-apps   # OpenShift GitOps: let that instance deploy here
+```
+
+The Argo CD suite checks each instance you list: its ArgoCD resource is Available with the
+server, repo server, controller and Redis running; and its Applications are synced and healthy,
+with Degraded, Missing, failed syncs and error conditions (such as a repository it can't reach)
+named in the failure. `ignore` leaves Applications out, `failOnOutOfSync: false` tolerates
+drift. With `deploy.enabled`, the check deploys as a team would: it creates an Application in
+that instance's namespace that syncs [argocd/probe-app](argocd/probe-app) (one ConfigMap) into
+the scratch namespace, waits for Synced and Healthy, then deletes it with Argo CD's resources
+finalizer, so Argo CD prunes the ConfigMap. Turn deploy on for the instance teams use; the
+platform instance usually has the rights to deploy anything, which a probe should not use. The
+console gets a Role in each instance's namespace, allowing it to read the ArgoCD resource and
+Applications, and, for deploy, to create and delete Applications there.
 
 They test from a tenant's side, so they need to create things: pods, Routes, PVCs and
 snapshots, a cert-manager Certificate. (The Service the Routes point at comes with the chart:

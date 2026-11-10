@@ -226,11 +226,47 @@ class ObservabilitySuite:
 
 
 @dataclass
+class ArgoDeploy:
+    """A test Application the probe creates in an instance's namespace, to deploy as a team would."""
+
+    enabled: bool = False
+    project: str = "default"
+    repo_url: str = ""
+    path: str = ""
+    revision: str = "HEAD"
+    timeout: float = _duration()
+
+
+@dataclass
+class ArgoInstance:
+    # What the console calls it, e.g. "platform" or "applications".
+    name: str = ""
+    namespace: str = ""
+    # The ArgoCD resource's name; empty = the one in the namespace.
+    argocd: str = ""
+    # Check the instance's Applications.
+    applications: bool = True
+    # Health and sync states that fail the Applications check. Degraded, Missing, failed syncs
+    # and error conditions always do.
+    fail_on_out_of_sync: bool = True
+    # Applications to leave out of that check.
+    ignore: list[str] = field(default_factory=list)
+    deploy: ArgoDeploy = field(default_factory=ArgoDeploy)
+
+
+@dataclass
+class ArgoSuite:
+    enabled: bool = False
+    instances: list[ArgoInstance] = field(default_factory=list)
+
+
+@dataclass
 class Suites:
     ingress: IngressSuite = field(default_factory=IngressSuite)
     workloads: WorkloadsSuite = field(default_factory=WorkloadsSuite)
     storage: StorageSuite = field(default_factory=StorageSuite)
     observability: ObservabilitySuite = field(default_factory=ObservabilitySuite)
+    argocd: ArgoSuite = field(default_factory=ArgoSuite)
 
 
 @dataclass
@@ -259,7 +295,8 @@ class Config:
     def write_suites(self) -> bool:
         """Whether any suite that creates objects in the scratch namespace is on."""
         s = self.suites
-        return s.ingress.enabled or s.workloads.enabled or s.storage.enabled or s.observability.enabled
+        deploys = s.argocd.enabled and any(i.deploy.enabled for i in s.argocd.instances)
+        return s.ingress.enabled or s.workloads.enabled or s.storage.enabled or s.observability.enabled or deploys
 
     def apply_defaults(self) -> Config:
         if not self.trust_domain:
@@ -283,6 +320,10 @@ class Config:
             self.suites.storage.pod_timeout = 180.0
         if not self.suites.observability.timeout:
             self.suites.observability.timeout = 180.0
+        for inst in self.suites.argocd.instances:
+            inst.name = inst.name or inst.namespace
+            if not inst.deploy.timeout:
+                inst.deploy.timeout = 180.0
         return self
 
     def principal(self, namespace: str, sa: str) -> str:
@@ -330,6 +371,10 @@ def _decode(cls, data, where: str):
                 raise ConfigError(f"{path}: {e}") from None
         elif dataclasses.is_dataclass(typ):
             value = _decode(typ, value, path)
+        elif typing.get_origin(typ) is list and dataclasses.is_dataclass(typing.get_args(typ)[0]):
+            if not isinstance(value, list):
+                raise ConfigError(f"{path}: expected a list")
+            value = [_decode(typing.get_args(typ)[0], v, f"{path}[{i}]") for i, v in enumerate(value)]
         elif typ is bool:
             if not isinstance(value, bool):
                 raise ConfigError(f"{path}: expected true or false")

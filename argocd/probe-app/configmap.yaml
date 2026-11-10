@@ -1,0 +1,12 @@
+# What platform-probe's Argo CD deploy check syncs into the scratch namespace, to prove a team
+# can deploy through Argo CD. Point suites.argocd.instances[].deploy at a mirror of this
+# directory if your Argo CD can't reach GitHub.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: platform-probe-argocd
+  labels:
+    app.kubernetes.io/name: platform-probe
+    app.kubernetes.io/component: argocd-deploy-check
+data:
+  purpose: Synced by platform-probe's Argo CD deploy check, and pruned when the check ends.

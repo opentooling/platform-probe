@@ -31,6 +31,7 @@ class FakeKube:
         self.route_admitted = True
         self.calls: list[tuple[str, str]] = []
         self.emitted: list[dict] = []
+        self.argo_result: dict | None = None  # a test Application's status instead of Synced/Healthy
 
     # --- storage ---
 
@@ -47,6 +48,8 @@ class FakeKube:
             "storageclasses",
             "namespaces",
             "appliedclusterresourcequotas",
+            "argocds",
+            "applications",
         }
     )
 
@@ -133,6 +136,13 @@ class FakeKube:
                 "reason": "HostAlreadyClaimed",
             }
             obj["status"] = {"ingress": [{"host": f"{obj['metadata']['name']}.apps.example.com", "conditions": [cond]}]}
+        elif coll.endswith("/applications") and not obj.get("status"):
+            # Argo CD syncs the test Application, or reports why it can't.
+            obj["status"] = copy.deepcopy(self.argo_result) or {
+                "sync": {"status": "Synced"},
+                "health": {"status": "Healthy"},
+                "resources": [{"kind": "ConfigMap", "name": "platform-probe-argocd"}],
+            }
         elif coll.endswith("/certificates") and not obj.get("status"):
             obj["status"] = {"conditions": [{"type": "Ready", "status": "True"}], "notAfter": "2027-02-07T00:00:00Z"}
         elif coll.endswith("/volumesnapshots") and not obj.get("status"):

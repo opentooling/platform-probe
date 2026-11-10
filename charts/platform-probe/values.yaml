@@ -247,6 +247,39 @@ suites:
       endpoint: ""
     # How long a signal may take to show up in Grafana.
     timeout: 3m
+  # Argo CD instances (e.g. one for the platform, one for teams' applications): each is
+  # available, its Applications are synced and healthy, and, with deploy on, a team can deploy
+  # through it. The console gets a Role in each instance's namespace: read ArgoCD resources
+  # and Applications, and with deploy on, create and delete Applications.
+  argocd:
+    enabled: false
+    instances:
+      - name: platform
+        namespace: openshift-gitops
+        # The ArgoCD resource's name. Empty = the one in the namespace.
+        argocd: ""
+        # Check the instance's Applications: Degraded, Missing, failed syncs and error
+        # conditions (e.g. an unreachable repo) fail; OutOfSync too unless turned off.
+        applications: true
+        failOnOutOfSync: true
+        # Applications to leave out, by name.
+        ignore: []
+        # Deploy a test Application through this instance (see the applications example).
+        deploy:
+          enabled: false
+      # - name: applications
+      #   namespace: gitops-apps
+      #   deploy:
+      #     # Creates an Application that syncs argocd/probe-app (one ConfigMap) into the scratch
+      #     # namespace, waits for Synced and Healthy, then deletes it, pruning the ConfigMap.
+      #     # The instance must manage the scratch namespace: on OpenShift GitOps, add
+      #     # scratch.labels: {argocd.argoproj.io/managed-by: gitops-apps}.
+      #     enabled: true
+      #     project: default
+      #     repoURL: https://github.com/opentooling/platform-probe   # or your mirror
+      #     path: argocd/probe-app
+      #     revision: main
+      #     timeout: 3m
 
 # Python services use about 30Mi each, the console about 35Mi.
 resources:

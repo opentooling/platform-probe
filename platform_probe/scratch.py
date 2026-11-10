@@ -69,8 +69,13 @@ async def sweep(p: Probe) -> None:
     """Delete everything this release created in the scratch namespace. An API that isn't
     installed (cert-manager, snapshots) or isn't allowed is skipped."""
     selector = quote(f"{LABEL_RELEASE}={p.cfg.release}", safe="")
-    for collection in KINDS:
-        base = collection.format(ns=ns(p))
+    # Test Applications live in their Argo CD instance's namespace, not the scratch one.
+    argo = [
+        f"/apis/argoproj.io/v1alpha1/namespaces/{i.namespace}/applications"
+        for i in p.cfg.suites.argocd.instances
+        if p.cfg.suites.argocd.enabled and i.deploy.enabled
+    ]
+    for base in argo + [c.format(ns=ns(p)) for c in KINDS]:
         try:
             lst = await p.kube.get(f"{base}?labelSelector={selector}")
         except StatusError as e:

@@ -3,6 +3,24 @@
 {{- $sa := dict "ctx" . }}
 {{- $v := .Values }}
 {{- /* Everything the console needs to know, from these values only. Read by platform_probe/config.py, which rejects keys it does not know. */}}
+{{- $argoInstances := list }}
+{{- range .Values.suites.argocd.instances }}
+{{- $d := .deploy | default dict }}
+{{- $argoInstances = append $argoInstances (dict
+  "name" (.name | default "")
+  "namespace" .namespace
+  "argocd" (.argocd | default "")
+  "applications" (ternary .applications true (hasKey . "applications"))
+  "failOnOutOfSync" (ternary .failOnOutOfSync true (hasKey . "failOnOutOfSync"))
+  "ignore" (.ignore | default list)
+  "deploy" (dict
+    "enabled" ($d.enabled | default false)
+    "project" ($d.project | default "default")
+    "repoUrl" ($d.repoURL | default "")
+    "path" ($d.path | default "")
+    "revision" ($d.revision | default "HEAD")
+    "timeout" ($d.timeout | default "3m"))) }}
+{{- end }}
 {{- $pullSecrets := list }}
 {{- range .Values.imagePullSecrets }}{{ $pullSecrets = append $pullSecrets .name }}{{ end }}
 {{- $config := dict
@@ -90,7 +108,10 @@
       "metricsPort" (int $v.suites.observability.metrics.port)
       "podAnnotations" $v.suites.observability.metrics.podAnnotations
       "otlpEndpoint" $v.suites.observability.otlp.endpoint
-      "timeout" $v.suites.observability.timeout))
+      "timeout" $v.suites.observability.timeout)
+    "argocd" (dict
+      "enabled" $v.suites.argocd.enabled
+      "instances" $argoInstances))
 }}
 apiVersion: v1
 kind: ConfigMap

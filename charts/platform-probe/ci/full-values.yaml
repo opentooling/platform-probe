@@ -53,3 +53,17 @@ suites:
       extra: { cluster: prod-eu-1 }
     otlp:
       endpoint: http://alloy.alloy.svc:4318
+  argocd:
+    enabled: true
+    instances:
+      - name: platform
+        namespace: openshift-gitops
+        ignore: [sandbox]
+      - name: applications
+        namespace: gitops-apps
+        failOnOutOfSync: false
+        deploy:
+          enabled: true
+          repoURL: https://github.com/opentooling/platform-probe
+          path: argocd/probe-app
+          revision: main

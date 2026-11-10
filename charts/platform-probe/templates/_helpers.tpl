@@ -94,7 +94,11 @@ platform-probe/role: {{ .role }}
 {{/* Whether any suite that creates objects in the scratch namespace is on. */}}
 {{- define "platform-probe.writeSuites" -}}
 {{- $s := .Values.suites }}
-{{- if or $s.ingress.enabled $s.workloads.enabled $s.storage.enabled $s.observability.enabled }}true{{ end }}
+{{- $argoDeploy := false }}
+{{- if $s.argocd.enabled }}
+{{- range $s.argocd.instances }}{{ if and .deploy .deploy.enabled }}{{ $argoDeploy = true }}{{ end }}{{ end }}
+{{- end }}
+{{- if or $s.ingress.enabled $s.workloads.enabled $s.storage.enabled $s.observability.enabled $argoDeploy }}true{{ end }}
 {{- end }}
 
 {{/* Labels for sidecar injection. Pass a dict: ctx, mesh (bool). */}}
@@ -135,6 +139,16 @@ capabilities:
 {{- $o := .Values.suites.observability }}
 {{- if and $o.enabled (or (not $o.grafana.url) (not $o.grafana.token.existingSecret)) }}
 {{- fail "suites.observability.enabled needs suites.observability.grafana.url and .grafana.token.existingSecret" }}
+{{- end }}
+{{- if .Values.suites.argocd.enabled }}
+{{- range .Values.suites.argocd.instances }}
+{{- if not .namespace }}
+{{- fail "every suites.argocd.instances entry needs a namespace" }}
+{{- end }}
+{{- if and .deploy .deploy.enabled (not .deploy.repoURL) }}
+{{- fail (printf "suites.argocd.instances %s: deploy.enabled needs deploy.repoURL" (.name | default .namespace)) }}
+{{- end }}
+{{- end }}
 {{- end }}
 {{- if not (has $o.metrics.method (list "annotations" "otlp")) }}
 {{- fail "suites.observability.metrics.method must be annotations or otlp" }}

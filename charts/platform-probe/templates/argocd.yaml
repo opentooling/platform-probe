@@ -1,0 +1,40 @@
+{{- if .Values.suites.argocd.enabled }}
+{{- $fn := include "platform-probe.fullname" . }}
+{{- $name := printf "%s-%s" .Release.Namespace $fn | trunc 63 | trimSuffix "-" }}
+{{- range .Values.suites.argocd.instances }}
+{{- $deploy := and .deploy .deploy.enabled }}
+---
+# The Argo CD checks for instance {{ .name | default .namespace }}: read its ArgoCD resource and
+# Applications{{ if $deploy }}, and create and delete the test Application{{ end }}.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ .namespace }}
+  labels:
+    {{- include "platform-probe.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["argocds"]
+    verbs: ["get", "list"]
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications"]
+    verbs: ["get", "list"{{ if $deploy }}, "create", "delete"{{ end }}]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ .namespace }}
+  labels:
+    {{- include "platform-probe.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "platform-probe.sa" (dict "ctx" $ "role" "console") }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- end }}
