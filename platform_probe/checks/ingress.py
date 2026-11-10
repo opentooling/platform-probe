@@ -37,6 +37,8 @@ async def check_ingress_controller(p: Probe) -> Outcome:
 async def _route(p: Probe, termination: str) -> tuple[str, Outcome | None]:
     """Create a Route of the given termination to the backend and wait for the router to admit
     it. Returns its host, or the outcome to report if that didn't work."""
+    if not p.cfg.scratch.backend_service:
+        return "", failed("no ingress backend Service in the config (scratch.backendService)")
     try:
         backend = await scratch.ensure_backend(p)
     except Exception as e:  # noqa: BLE001

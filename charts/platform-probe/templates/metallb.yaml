@@ -1,0 +1,47 @@
+{{- if .Values.suites.metallb.enabled }}
+{{- $fn := include "platform-probe.fullname" . }}
+{{- $name := printf "%s-%s" .Release.Namespace $fn | trunc 63 | trimSuffix "-" }}
+{{- $m := .Values.suites.metallb }}
+{{- $bgpNs := default $m.namespace $m.bgpNamespace }}
+{{- range $ns := list $m.namespace $bgpNs | uniq }}
+---
+# The MetalLB checks read its components, pools, advertisements and status. Read-only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "platform-probe.labels" $ | nindent 4 }}
+rules:
+  {{- if eq $ns $m.namespace }}
+  - apiGroups: ["apps"]
+    resources: ["deployments", "daemonsets"]
+    verbs: ["list"]
+  - apiGroups: ["metallb.io"]
+    resources: ["ipaddresspools", "l2advertisements", "bgpadvertisements", "servicel2statuses", "servicebgpstatuses"]
+    verbs: ["get", "list"]
+  {{- end }}
+  {{- if eq $ns $bgpNs }}
+  - apiGroups: ["frrk8s.metallb.io"]
+    resources: ["bgpsessionstates"]
+    verbs: ["list"]
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "platform-probe.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "platform-probe.sa" (dict "ctx" $ "role" "console") }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- end }}

@@ -98,7 +98,7 @@ platform-probe/role: {{ .role }}
 {{- if $s.argocd.enabled }}
 {{- range $s.argocd.instances }}{{ if and .deploy .deploy.enabled }}{{ $argoDeploy = true }}{{ end }}{{ end }}
 {{- end }}
-{{- if or $s.ingress.enabled $s.workloads.enabled $s.storage.enabled $s.observability.enabled $argoDeploy }}true{{ end }}
+{{- if or $s.ingress.enabled $s.workloads.enabled $s.storage.enabled $s.observability.enabled $s.metallb.enabled $argoDeploy }}true{{ end }}
 {{- end }}
 
 {{/* Labels for sidecar injection. Pass a dict: ctx, mesh (bool). */}}

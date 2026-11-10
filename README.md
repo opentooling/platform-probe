@@ -8,7 +8,8 @@ The **connectivity** suite, always on, covers a **Red Hat Connectivity Link** AP
 **OpenShift Service Mesh 3**. Three **platform suites**, each switched on in the values, cover
 what else a team relies on: **ingress & certificates**, **workload security**, **storage** and
 **observability** (telemetry reaching a central Grafana, Loki, Mimir and Tempo stack) and
-**Argo CD** (every instance up, its Applications healthy, teams able to deploy through it).
+**Argo CD** (every instance up, its Applications healthy, teams able to deploy through it) and
+**MetalLB** (LoadBalancer Services get an announced address that carries traffic).
 See [Platform suites](#platform-suites), and [Adding checks](#adding-checks) for more.
 
 platform-probe started as [opentooling/rhcl-probe](https://github.com/opentooling/rhcl-probe),
@@ -41,6 +42,7 @@ Platform suites, when switched on ([details](#platform-suites)):
 | Ingress & certificates | default IngressController available · edge Route with a trusted certificate that isn't about to expire, HTTP redirected to HTTPS · reencrypt Route to a service-CA certificate · passthrough Route ends TLS at the pod · cert-manager issues a certificate |
 | Workload security | a tenant pod gets the expected SCC and a UID from the namespace's range · privileged, root, hostPath and hostNetwork pods refused · ResourceQuota refuses a pod over quota · a ClusterResourceQuota covers the namespace and refuses a pod over it · LimitRange sets defaults and refuses a container over its max |
 | Storage | exactly one default StorageClass · for each StorageClass: a PVC binds and data written by one pod is read by another · expansion · snapshot restored to a new PVC with the data |
+| MetalLB | controller and speakers ready on every node · every address pool advertised (L2 or BGP), with free addresses, BGP sessions established · a LoadBalancer Service has an address from the expected pool, is announced, and carries traffic from a pod |
 | Argo CD | each instance (e.g. platform and applications) available · its Applications synced and healthy, no failed syncs or repo errors · a test Application deploys through it into the scratch namespace and is pruned again |
 | Observability | a pod's log line reaches Loki · its metric reaches Mimir (scraped or pushed over OTLP) · its span reaches Tempo; each with the time it took |
 
@@ -106,7 +108,7 @@ The values you are most likely to set:
 | `mesh.strictMTLS`, `.authorizationPolicies`, `.trafficManagement` | `true` | Mesh features to set up and check |
 | `mesh.egress.registryOnly` | `true` | Limit the console to the mesh registry |
 | `networkPolicies.enabled` | `true` | Ingress NetworkPolicies for the demo app |
-| `suites.ingress`, `.workloads`, `.storage`, `.observability`, `.argocd` | off | [Platform suites](#platform-suites) to run |
+| `suites.ingress`, `.workloads`, `.storage`, `.observability`, `.argocd`, `.metallb` | off | [Platform suites](#platform-suites) to run |
 | `scratch.namespace`, `scratch.create` | `<namespace>-scratch`, `true` | Where the platform suites create their test objects |
 | `scratch.labels`, `scratch.annotations` | `{}` | Labels and annotations for the scratch namespace the chart creates |
 | `extraObjects` | `[]` | Extra manifests, see below |
@@ -182,6 +184,26 @@ finalizer, so Argo CD prunes the ConfigMap. Turn deploy on for the instance team
 platform instance usually has the rights to deploy anything, which a probe should not use. The
 console gets a Role in each instance's namespace, allowing it to read the ArgoCD resource and
 Applications, and, for deploy, to create and delete Applications there.
+
+```yaml
+suites:
+  metallb:
+    enabled: true
+    pool: public                       # the IPAddressPool teams get; empty = MetalLB picks
+    bgpNamespace: openshift-frr-k8s    # where frr-k8s keeps BGPSessionStates, for BGP
+```
+
+The MetalLB suite reads MetalLB's own resources (a read-only Role in its namespace): the
+controller and every speaker are ready, each IPAddressPool is covered by an L2Advertisement or
+BGPAdvertisement, BGP sessions are Established, and pools that report their usage (MetalLB
+0.15+) have addresses left. Its end-to-end check uses a LoadBalancer Service the chart creates
+in the scratch namespace, in front of the backend pod each run starts: the Service has an
+address from the expected pool, MetalLB reports who announces it (the node, with L2, or the BGP
+peers; MetalLB 0.14+), and a pod reaches the backend on it. The console may not create
+Services, so this shows MetalLB serving an existing Service, not assigning a new one each run;
+the Service holds one address while the release is installed. Traffic from a pod to the address
+may be handled inside the cluster's network, so the announcement is what shows the address is
+reachable from outside.
 
 They test from a tenant's side, so they need to create things: pods, Routes, PVCs and
 snapshots, a cert-manager Certificate. (The Service the Routes point at comes with the chart:

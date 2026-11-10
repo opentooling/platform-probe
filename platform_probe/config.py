@@ -261,12 +261,28 @@ class ArgoSuite:
 
 
 @dataclass
+class MetalLBSuite:
+    enabled: bool = False
+    namespace: str = "metallb-system"
+    # Where frr-k8s keeps BGPSessionStates; empty = namespace.
+    bgp_namespace: str = ""
+    # The LoadBalancer Service the chart creates in the scratch namespace, and the pool it asks for.
+    service: str = ""
+    pool: str = ""
+    # Fail when a pool that reports its usage has fewer free addresses than this.
+    min_free_addresses: int = 1
+    # How long the Service may take to get its address.
+    timeout: float = _duration()
+
+
+@dataclass
 class Suites:
     ingress: IngressSuite = field(default_factory=IngressSuite)
     workloads: WorkloadsSuite = field(default_factory=WorkloadsSuite)
     storage: StorageSuite = field(default_factory=StorageSuite)
     observability: ObservabilitySuite = field(default_factory=ObservabilitySuite)
     argocd: ArgoSuite = field(default_factory=ArgoSuite)
+    metallb: MetalLBSuite = field(default_factory=MetalLBSuite)
 
 
 @dataclass
@@ -296,7 +312,14 @@ class Config:
         """Whether any suite that creates objects in the scratch namespace is on."""
         s = self.suites
         deploys = s.argocd.enabled and any(i.deploy.enabled for i in s.argocd.instances)
-        return s.ingress.enabled or s.workloads.enabled or s.storage.enabled or s.observability.enabled or deploys
+        return (
+            s.ingress.enabled
+            or s.workloads.enabled
+            or s.storage.enabled
+            or s.observability.enabled
+            or s.metallb.enabled
+            or deploys
+        )
 
     def apply_defaults(self) -> Config:
         if not self.trust_domain:
@@ -320,6 +343,10 @@ class Config:
             self.suites.storage.pod_timeout = 180.0
         if not self.suites.observability.timeout:
             self.suites.observability.timeout = 180.0
+        m = self.suites.metallb
+        m.bgp_namespace = m.bgp_namespace or m.namespace
+        if not m.timeout:
+            m.timeout = 120.0
         for inst in self.suites.argocd.instances:
             inst.name = inst.name or inst.namespace
             if not inst.deploy.timeout:

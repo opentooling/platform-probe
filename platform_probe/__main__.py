@@ -53,7 +53,7 @@ def serve() -> int:
 
     port = int(os.environ.get("PORT") or "8080")
     cert, key = os.environ.get("TLS_CERT_FILE"), os.environ.get("TLS_KEY_FILE")
-    if cert and key:
+    if cert and key and os.path.exists(cert) and os.path.exists(key):
         # The ingress suite's backend: HTTP and HTTPS, for edge, reencrypt and passthrough Routes.
         tls_port = int(os.environ.get("TLS_PORT") or "8443")
         log.info("platform-probe %s: %s listening on :%d and TLS :%d", __version__, role, port, tls_port)

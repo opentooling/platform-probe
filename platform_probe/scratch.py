@@ -238,10 +238,11 @@ async def run_task(
 
 
 async def ensure_backend(p: Probe) -> str:
-    """The pod the ingress checks route to, started once per run behind the backend Service the
-    chart creates (the console may not create Services): the probe's own pricing service on
-    HTTP 8080, and on HTTPS 8443 with the Service's certificate from OpenShift's service CA.
-    Returns the Service name."""
+    """The pod the ingress and MetalLB checks send traffic to, started once per run behind the
+    Services the chart creates (the console may not create Services), which select it by the
+    platform-probe/backend label: the probe's own pricing service on HTTP 8080, and, when the
+    ingress backend Service exists, on HTTPS 8443 with its certificate from OpenShift's service
+    CA. Returns the ingress backend Service name, or "" without one."""
     if "backend" in p.state:
         if isinstance(p.state["backend"], Exception):
             raise p.state["backend"]
@@ -249,8 +250,16 @@ async def ensure_backend(p: Probe) -> str:
     svc = p.cfg.scratch.backend_service
     pod_name = name(p, "backend")
     try:
-        if not svc:
-            raise ProbeError("no backend Service in the config (scratch.backendService)")
+        env = [{"name": "ROLE", "value": "pricing"}, {"name": "VERSION", "value": "backend"}]
+        mounts, volumes = [], []
+        if svc:
+            # Optional, so a run doesn't hang where the service CA hasn't issued it (yet).
+            env += [
+                {"name": "TLS_CERT_FILE", "value": "/tls/tls.crt"},
+                {"name": "TLS_KEY_FILE", "value": "/tls/tls.key"},
+            ]
+            mounts = [{"name": "tls", "mountPath": "/tls", "readOnly": True}]
+            volumes = [{"name": "tls", "secret": {"secretName": svc + "-tls", "optional": True}}]
         pod = {
             "apiVersion": "v1",
             "kind": "Pod",
@@ -259,17 +268,12 @@ async def ensure_backend(p: Probe) -> str:
                 p,
                 {
                     "name": "backend",
-                    "env": [
-                        {"name": "ROLE", "value": "pricing"},
-                        {"name": "VERSION", "value": "ingress"},
-                        {"name": "TLS_CERT_FILE", "value": "/tls/tls.crt"},
-                        {"name": "TLS_KEY_FILE", "value": "/tls/tls.key"},
-                    ],
+                    "env": env,
                     "ports": [{"name": "http", "containerPort": 8080}, {"name": "https", "containerPort": 8443}],
                     "readinessProbe": {"httpGet": {"path": "/healthz", "port": 8080}, "periodSeconds": 2},
-                    "volumeMounts": [{"name": "tls", "mountPath": "/tls", "readOnly": True}],
+                    "volumeMounts": mounts,
                 },
-                [{"name": "tls", "secret": {"secretName": svc + "-tls"}}],
+                volumes,
             ),
         }
         pod["metadata"]["labels"]["platform-probe/backend"] = "true"

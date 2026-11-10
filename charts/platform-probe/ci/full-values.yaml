@@ -67,3 +67,7 @@ suites:
           repoURL: https://github.com/opentooling/platform-probe
           path: argocd/probe-app
           revision: main
+  metallb:
+    enabled: true
+    bgpNamespace: openshift-frr-k8s
+    pool: public

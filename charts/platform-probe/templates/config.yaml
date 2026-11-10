@@ -111,7 +111,15 @@
       "timeout" $v.suites.observability.timeout)
     "argocd" (dict
       "enabled" $v.suites.argocd.enabled
-      "instances" $argoInstances))
+      "instances" $argoInstances)
+    "metallb" (dict
+      "enabled" $v.suites.metallb.enabled
+      "namespace" $v.suites.metallb.namespace
+      "bgpNamespace" $v.suites.metallb.bgpNamespace
+      "service" (ternary (printf "%s-metallb" $fn) "" $v.suites.metallb.enabled)
+      "pool" $v.suites.metallb.pool
+      "minFreeAddresses" (int $v.suites.metallb.minFreeAddresses)
+      "timeout" $v.suites.metallb.timeout))
 }}
 apiVersion: v1
 kind: ConfigMap

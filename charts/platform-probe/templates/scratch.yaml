@@ -47,6 +47,12 @@ rules:
     verbs: ["create", "get", "list", "delete"]
   {{- end }}
   {{- end }}
+  {{- if .Values.suites.metallb.enabled }}
+  # Read the MetalLB test Service's address. Reading only: creating Services isn't allowed.
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get"]
+  {{- end }}
   {{- if .Values.suites.workloads.enabled }}
   - apiGroups: [""]
     resources: ["resourcequotas", "limitranges"]
@@ -108,6 +114,33 @@ spec:
     - name: https
       port: 8443
       targetPort: 8443
+      protocol: TCP
+{{- end }}
+{{- if .Values.suites.metallb.enabled }}
+---
+# The MetalLB check's LoadBalancer Service, in front of the same backend pod each run starts.
+# It holds one address from the pool while the release is installed.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fn }}-metallb
+  namespace: {{ $ns }}
+  labels:
+    {{- include "platform-probe.labels" . | nindent 4 }}
+  {{- with .Values.suites.metallb.pool }}
+  annotations:
+    metallb.io/address-pool: {{ . }}
+    metallb.universe.tf/address-pool: {{ . }}
+  {{- end }}
+spec:
+  type: LoadBalancer
+  selector:
+    platform-probe/release: {{ .Release.Name }}
+    platform-probe/backend: "true"
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
       protocol: TCP
 {{- end }}
 {{- if and .Values.trustedCA.openshiftInjected (not .Values.trustedCA.configMap) }}

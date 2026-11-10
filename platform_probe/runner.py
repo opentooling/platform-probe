@@ -48,6 +48,7 @@ GROUP_WORKLOADS = "Workload security"
 GROUP_STORAGE = "Storage"
 GROUP_OBSERVABILITY = "Observability"
 GROUP_ARGOCD = "Argo CD"
+GROUP_METALLB = "MetalLB"
 
 # The connectivity suite (the three groups above) always runs; the others are switched on in
 # the chart's suites.* values.

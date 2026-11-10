@@ -49,6 +49,14 @@ class FakeKube:
             "namespaces",
             "appliedclusterresourcequotas",
             "argocds",
+            "deployments",
+            "daemonsets",
+            "ipaddresspools",
+            "l2advertisements",
+            "bgpadvertisements",
+            "bgpsessionstates",
+            "servicel2statuses",
+            "servicebgpstatuses",
             "applications",
         }
     )
@@ -80,8 +88,10 @@ class FakeKube:
         if not name:
             items = self.items(coll)
             if sel := query.get("labelSelector"):
-                k, _, v = unquote(sel[0]).partition("=")
-                items = [o for o in items if (o["metadata"].get("labels") or {}).get(k) == v]
+                want = dict(term.partition("=")[::2] for term in unquote(sel[0]).split(","))
+                items = [
+                    o for o in items if all((o["metadata"].get("labels") or {}).get(k) == v for k, v in want.items())
+                ]
             return {"items": copy.deepcopy(items)}
         obj = self.objects.get(coll, {}).get(name)
         if obj is None:

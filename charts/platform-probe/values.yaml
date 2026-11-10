@@ -247,6 +247,22 @@ suites:
       endpoint: ""
     # How long a signal may take to show up in Grafana.
     timeout: 3m
+  # MetalLB: controller and speakers ready, every address pool advertised (L2 or BGP) with
+  # addresses left and BGP sessions up, and a LoadBalancer Service that gets an address from
+  # the pool, is announced and carries traffic from a pod. The chart creates that Service in the
+  # scratch namespace (it holds one address while installed); the console only reads MetalLB's
+  # resources, with a Role in its namespace.
+  metallb:
+    enabled: false
+    namespace: metallb-system
+    # Where frr-k8s keeps BGPSessionStates, if not in namespace (e.g. openshift-frr-k8s).
+    bgpNamespace: ""
+    # The IPAddressPool the test Service asks for. Empty = MetalLB picks an autoAssign pool.
+    pool: ""
+    # Fail when a pool that reports its usage (MetalLB 0.15+) has fewer free addresses.
+    minFreeAddresses: 1
+    # How long the Service may take to get its address.
+    timeout: 2m
   # Argo CD instances (e.g. one for the platform, one for teams' applications): each is
   # available, its Applications are synced and healthy, and, with deploy on, a team can deploy
   # through it. The console gets a Role in each instance's namespace: read ArgoCD resources
