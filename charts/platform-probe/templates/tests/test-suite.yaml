@@ -7,7 +7,17 @@ sidecar (a sidecar would keep them from ever completing), which is why the conso
 plaintext on its port.
 */}}
 {{- $fn := include "platform-probe.fullname" . }}
-{{- range $i, $cat := splitList "," (include "platform-probe.categories" .) }}
+{{- $enabled := splitList "," (include "platform-probe.categories" .) }}
+{{- $chosen := .Values.tests.categories | default $enabled }}
+{{- range $c := $chosen }}
+{{- if not (has $c $enabled) }}
+{{- fail (printf "tests.categories: %s isn't one of the enabled categories: %s" $c (join ", " $enabled)) }}
+{{- end }}
+{{- end }}
+{{- /* In run order, whatever order they were listed in. */}}
+{{- $i := 0 }}
+{{- range $cat := $enabled }}
+{{- if has $cat $chosen }}
 ---
 apiVersion: v1
 kind: Pod
@@ -20,6 +30,7 @@ metadata:
   annotations:
     helm.sh/hook: test
     helm.sh/hook-weight: {{ $i | quote }}
+    {{- $i = add1 $i }}
     helm.sh/hook-delete-policy: before-hook-creation
 spec:
   restartPolicy: Never
@@ -40,5 +51,6 @@ spec:
       resources:
         requests: { cpu: 10m, memory: 32Mi }
         limits: { cpu: 200m, memory: 96Mi }
+{{- end }}
 {{- end }}
 {{- end }}

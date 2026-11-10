@@ -62,6 +62,14 @@ everything and fails if anything failed; run one category with `--filter`:
 helm test probe -n platform-probe --filter name=probe-platform-probe-test-storage --logs
 ```
 
+`--filter` can be repeated, or exclude a category with `!name=…`. To make a plain `helm test`
+run only some categories, list them in the values:
+
+```yaml
+tests:
+  categories: [platform, gateway, mesh]   # empty = every enabled category
+```
+
 The categories are `platform`, `gateway`, `mesh`, and each enabled suite: `ingress`,
 `workloads`, `storage`, `observability`, `argocd`, `metallb`. From a terminal or CI, `POST
 /api/run?groups=storage,ingress` runs several, as does `platform-probe check --groups

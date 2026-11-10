@@ -320,10 +320,15 @@ affinity: {}
 
 # `helm test` runs one pod per check category (platform, gateway, mesh, then each enabled
 # suite: ingress, workloads, storage, observability, argocd, metallb), one after another; each
-# fails if any check in its category fails. Run one category with
+# fails if any check in its category fails. tests.categories picks which ones; at test time,
+# --filter picks among them (repeat it, or exclude with !):
 #   helm test <release> --filter name=<release>-platform-probe-test-<category>
+#   helm test <release> --filter '!name=<release>-platform-probe-test-storage'
 tests:
   enabled: true
+  # The categories `helm test` runs; empty = every enabled one. E.g. [platform, gateway] for a
+  # quick check after a gateway change. A category whose suite is off can't be listed.
+  categories: []
   # How long one category may take. Storage, with volumes attaching, takes the longest.
   timeout: 20m
 
