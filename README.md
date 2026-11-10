@@ -106,6 +106,7 @@ The values you are most likely to set:
 | `networkPolicies.enabled` | `true` | Ingress NetworkPolicies for the demo app |
 | `suites.ingress`, `.workloads`, `.storage`, `.observability` | off | [Platform suites](#platform-suites) to run |
 | `scratch.namespace`, `scratch.create` | `<namespace>-scratch`, `true` | Where the platform suites create their test objects |
+| `scratch.labels`, `scratch.annotations` | `{}` | Labels and annotations for the scratch namespace the chart creates |
 | `extraObjects` | `[]` | Extra manifests, see below |
 
 See [values.yaml](charts/platform-probe/values.yaml) for all of them.
@@ -163,6 +164,18 @@ default NetworkPolicies), and set `scratch.create: false`:
 
 ```bash
 oc new-project platform-probe-scratch
+```
+
+Or keep `scratch.create: true` and give the namespace what your platform keys on, such as the
+label your log collector selects or a Pod Security level. Values go through `tpl`:
+
+```yaml
+scratch:
+  labels:
+    logging.example.com/collect: "true"
+    pod-security.kubernetes.io/enforce: restricted
+  annotations:
+    openshift.io/node-selector: node-role.kubernetes.io/worker=
 ```
 
 Test pods run the probe's own image, as an arbitrary UID under `restricted-v2`, and report back

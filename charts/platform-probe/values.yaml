@@ -162,6 +162,17 @@ scratch:
   # NetworkPolicies) the way a tenant's namespace does, and the workload checks test those.
   # Either way the console gets a Role there, and nothing outside it.
   create: true
+  # Labels and annotations for the namespace the chart creates (ignored with create: false):
+  # whatever your platform keys on for a tenant namespace, so the suites see what a team sees.
+  # Values are rendered with tpl, so {{ .Release.Namespace }} and the chart's helpers work.
+  #   labels:
+  #     logging.example.com/collect: "true"          # opt in to log collection
+  #     pod-security.kubernetes.io/enforce: restricted
+  #   annotations:
+  #     openshift.io/node-selector: node-role.kubernetes.io/worker=
+  #     openshift.io/requester: "{{ .Release.Namespace }}"
+  labels: {}
+  annotations: {}
 
 suites:
   # Routes (edge, reencrypt, passthrough) reached from a pod in the scratch namespace, the

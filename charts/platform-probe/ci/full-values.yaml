@@ -21,6 +21,12 @@ mesh:
     allowedUrl: https://api.github.com/
 trustedCA:
   configMap: my-ca
+scratch:
+  labels:
+    logging.example.com/collect: "true"
+    team: "{{ .Release.Namespace }}"
+  annotations:
+    openshift.io/node-selector: node-role.kubernetes.io/worker=
 imagePullSecrets:
   - name: ghcr-pull
 suites:
