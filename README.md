@@ -49,6 +49,24 @@ Platform suites, when switched on ([details](#platform-suites)):
 A feature you switch off in the values (OIDC, NetworkPolicies, the platform's default deny…) is
 reported as **skipped**, not failed.
 
+The console opens on an **Overview**: the totals and every failing check, with its detail and
+hint, under **Needs attention**. A sidebar lists the categories, each marked with its state;
+a category's page shows its checks, failures first, and runs just that category. Running one
+category keeps the latest results of the others. Each view has its own address
+(`#/storage`, `#/experiments`) to bookmark.
+
+`helm test` runs one pod per category, one after another, so a plain `helm test` runs
+everything and fails if anything failed; run one category with `--filter`:
+
+```bash
+helm test probe -n platform-probe --filter name=probe-platform-probe-test-storage --logs
+```
+
+The categories are `platform`, `gateway`, `mesh`, and each enabled suite: `ingress`,
+`workloads`, `storage`, `observability`, `argocd`, `metallb`. From a terminal or CI, `POST
+/api/run?groups=storage,ingress` runs several, as does `platform-probe check --groups
+storage,ingress`.
+
 The console's **Experiments** panel runs the same scenarios hands-on: pick traffic split,
 retries, fault injection, circuit breaker, authorization or rate limit, send up to 60 requests
 and see each result.
@@ -256,7 +274,7 @@ The storage checks run pods one after another and wait for volumes to attach, wh
 minutes. Give `helm test` the time:
 
 ```bash
-helm test probe -n platform-probe --logs --timeout 20m
+helm test probe -n platform-probe --logs --timeout 30m
 ```
 
 ### Example: the RHCL platform with Keycloak and Vault

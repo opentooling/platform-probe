@@ -305,6 +305,8 @@ class Config:
     ca_file: str = ""
     # The probe's own image, which the platform suites' test pods run.
     image: str = ""
+    # `helm test` runs one pod per category, named <prefix><category>.
+    test_pod_prefix: str = ""
     scratch: Scratch = field(default_factory=Scratch)
     suites: Suites = field(default_factory=Suites)
 

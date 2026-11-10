@@ -9,6 +9,7 @@ import logging
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from . import __version__
@@ -92,15 +93,25 @@ def check(argv: list[str]) -> int:
     ap.add_argument("--url", default=os.environ.get("CONSOLE_URL") or "http://localhost:8080", help="console base URL")
     ap.add_argument("--junit", default="", help="also write JUnit XML to this file")
     ap.add_argument("--timeout", default="10m", type=parse_duration, help="give up after this long")
+    ap.add_argument(
+        "--groups",
+        default="",
+        help="run only these categories, comma-separated (platform, gateway, mesh, storage, ...)",
+    )
     args = ap.parse_args(argv)
 
-    req = urllib.request.Request(args.url.rstrip("/") + "/api/run?wait=true", data=b"", method="POST")
+    query = "wait=true" + (f"&groups={urllib.parse.quote(args.groups, safe=',')}" if args.groups else "")
+    req = urllib.request.Request(args.url.rstrip("/") + "/api/run?" + query, data=b"", method="POST")
     req.add_header("Content-Type", "application/json")
     try:
         with urllib.request.urlopen(req, timeout=args.timeout) as resp:
             data = json.load(resp)
     except urllib.error.HTTPError as e:
-        print(f"run: console answered {e.code} {e.reason}", file=sys.stderr)
+        try:
+            why = json.loads(e.read()).get("error", "")
+        except ValueError:
+            why = ""
+        print(f"run: console answered {e.code} {e.reason}" + (f": {why}" if why else ""), file=sys.stderr)
         return 2
     except (OSError, ValueError) as e:
         print(f"run: {e}", file=sys.stderr)

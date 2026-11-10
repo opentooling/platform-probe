@@ -318,9 +318,14 @@ nodeSelector: {}
 tolerations: []
 affinity: {}
 
-# `helm test` runs the whole suite and fails if any check fails.
+# `helm test` runs one pod per check category (platform, gateway, mesh, then each enabled
+# suite: ingress, workloads, storage, observability, argocd, metallb), one after another; each
+# fails if any check in its category fails. Run one category with
+#   helm test <release> --filter name=<release>-platform-probe-test-<category>
 tests:
   enabled: true
+  # How long one category may take. Storage, with volumes attaching, takes the longest.
+  timeout: 20m
 
 # -- Extra Kubernetes objects to deploy with the release: ExternalSecrets for the API keys, an
 # OpenShift Route for the console, policies of your own. Items can be YAML objects or strings;

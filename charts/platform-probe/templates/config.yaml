@@ -75,6 +75,7 @@
     "clientSecretFile" "/etc/platform-probe/oidc/client-secret")
   "caFile" (ternary "/etc/platform-probe/ca/ca-bundle.crt" "" (ne (include "platform-probe.caConfigMap" .) ""))
   "image" (include "platform-probe.image" .)
+  "testPodPrefix" (printf "%s-test-" $fn)
   "scratch" (dict
     "namespace" (include "platform-probe.scratchNamespace" .)
     "caConfigMap" (include "platform-probe.caConfigMap" .)

@@ -64,7 +64,10 @@ async def healthz(_request: web.Request) -> web.Response:
 
 
 async def report(request: web.Request) -> web.Response:
-    return json_response(200, request.app[PROBE].report().to_dict())
+    """The current (or last) run, plus the latest result of every check from any run, so the
+    console shows every category after running only one."""
+    p = request.app[PROBE]
+    return json_response(200, {**p.report().to_dict(), "latest": [r.to_dict() for r in p.latest()]})
 
 
 async def list_experiments(request: web.Request) -> web.Response:
@@ -111,16 +114,25 @@ async def config(request: web.Request) -> web.Response:
                 "networkPolicies": e.network_policies,
             },
             "oidc": c.oidc.enabled,
-            "checks": [{"id": ch.id, "group": ch.group, "name": ch.name} for ch in p.checks],
+            "categories": p.categories(),
+            "testPodPrefix": c.test_pod_prefix,
+            "checks": [{"id": ch.id, "group": ch.group, "category": ch.category, "name": ch.name} for ch in p.checks],
         },
     )
 
 
 async def run(request: web.Request) -> web.Response:
-    """Start a run in the background. With ?wait=true, answer when the run is done, with the
-    report (that is what `platform-probe check` and `helm test` use)."""
+    """Start a run in the background, of every check or of the categories in ?groups=a,b. With
+    ?wait=true, answer when the run is done, with the report (that is what `platform-probe
+    check` and `helm test` use)."""
     p = request.app[PROBE]
-    if not p.begin():
+    groups = [g.strip() for g in request.query.get("groups", "").split(",") if g.strip()]
+    try:
+        started = p.begin(groups)
+    except ValueError as e:
+        known = ", ".join(c["id"] for c in p.categories())
+        return json_response(400, {"error": f"{e}; this console runs: {known}"})
+    if not started:
         return json_response(409, {"error": "a run is already in progress"})
     task = asyncio.create_task(p.execute())
     request.app[RUN]["task"] = task

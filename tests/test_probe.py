@@ -330,3 +330,19 @@ def test_load_config(tmp_path):
     assert c.gateway.service_account == "gw-istio"
     assert c.limits.free.window == 10 and c.routes.timeout == 3 and c.expect.strict_mtls
     assert c.principal("ns", "sa") == "spiffe://cluster.local/ns/ns/sa/sa"
+
+
+def test_categories_and_selected_runs(tmp_path):
+    async def ok(_p):
+        return passed("fine")
+
+    checks = [Check("gateway-x", GROUP_GATEWAY, "x", ok), Check("mesh-y", GROUP_MESH, "y", ok)]
+    p = Probe(make_config(tmp_path), checks=checks)
+    assert p.categories() == [{"id": "gateway", "name": GROUP_GATEWAY}, {"id": "mesh", "name": GROUP_MESH}]
+    with pytest.raises(ValueError):
+        p.begin(["nope"])
+    assert run(p.run(["mesh"]))
+    assert [r.id for r in p.report().results] == ["mesh-y"] and p.report().total == 1
+    assert [r.id for r in p.latest()] == ["mesh-y"]
+    assert run(p.run(["gateway"]))
+    assert [r.id for r in p.latest()] == ["gateway-x", "mesh-y"]

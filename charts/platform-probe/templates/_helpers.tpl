@@ -101,6 +101,16 @@ platform-probe/role: {{ .role }}
 {{- if or $s.ingress.enabled $s.workloads.enabled $s.storage.enabled $s.observability.enabled $s.metallb.enabled $argoDeploy }}true{{ end }}
 {{- end }}
 
+{{/* The check categories that run, in run order: one `helm test` pod each. */}}
+{{- define "platform-probe.categories" -}}
+{{- $s := .Values.suites }}
+{{- $c := list "platform" "gateway" "mesh" }}
+{{- range $name := list "ingress" "workloads" "storage" "observability" "argocd" "metallb" }}
+{{- if (index $s $name).enabled }}{{ $c = append $c $name }}{{ end }}
+{{- end }}
+{{- join "," $c }}
+{{- end }}
+
 {{/* Labels for sidecar injection. Pass a dict: ctx, mesh (bool). */}}
 {{- define "platform-probe.meshLabels" -}}
 {{- if not .mesh }}

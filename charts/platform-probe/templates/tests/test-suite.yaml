@@ -1,36 +1,44 @@
 {{- if .Values.tests.enabled }}
 {{- /*
-`helm test`: run the whole suite on the console and fail if any check fails. The pod has no
-sidecar (a sidecar would keep it from ever completing), which is why the console accepts
+`helm test`: one pod per check category, each running that category on the console and failing
+if any of its checks fails. `helm test` runs them one after another, so a plain `helm test` runs
+everything; `--filter name=<fullname>-test-<category>` runs one category. The pods have no
+sidecar (a sidecar would keep them from ever completing), which is why the console accepts
 plaintext on its port.
 */}}
+{{- $fn := include "platform-probe.fullname" . }}
+{{- range $i, $cat := splitList "," (include "platform-probe.categories" .) }}
+---
 apiVersion: v1
 kind: Pod
 metadata:
-  name: {{ include "platform-probe.fullname" . }}-test-suite
+  name: {{ $fn }}-test-{{ $cat }}
   labels:
-    {{- include "platform-probe.componentSelector" (dict "ctx" . "component" "test") | nindent 4 }}
+    {{- include "platform-probe.componentSelector" (dict "ctx" $ "component" "test") | nindent 4 }}
+    platform-probe/category: {{ $cat }}
     sidecar.istio.io/inject: "false"
   annotations:
     helm.sh/hook: test
+    helm.sh/hook-weight: {{ $i | quote }}
     helm.sh/hook-delete-policy: before-hook-creation
 spec:
   restartPolicy: Never
   automountServiceAccountToken: false
-  {{- with .Values.imagePullSecrets }}
+  {{- with $.Values.imagePullSecrets }}
   imagePullSecrets:
     {{- toYaml . | nindent 4 }}
   {{- end }}
   securityContext:
-    {{- include "platform-probe.podSecurityContext" . | nindent 4 }}
+    {{- include "platform-probe.podSecurityContext" $ | nindent 4 }}
   containers:
     - name: suite
-      image: {{ include "platform-probe.image" . | quote }}
-      imagePullPolicy: {{ .Values.image.pullPolicy }}
-      args: ["check", "--url", {{ include "platform-probe.url" (dict "ctx" . "svc" "console") | quote }}]
+      image: {{ include "platform-probe.image" $ | quote }}
+      imagePullPolicy: {{ $.Values.image.pullPolicy }}
+      args: ["check", "--url", {{ include "platform-probe.url" (dict "ctx" $ "svc" "console") | quote }}, "--groups", {{ $cat | quote }}, "--timeout", {{ $.Values.tests.timeout | quote }}]
       securityContext:
-        {{- include "platform-probe.containerSecurityContext" . | nindent 8 }}
+        {{- include "platform-probe.containerSecurityContext" $ | nindent 8 }}
       resources:
         requests: { cpu: 10m, memory: 32Mi }
         limits: { cpu: 200m, memory: 96Mi }
+{{- end }}
 {{- end }}

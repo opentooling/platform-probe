@@ -60,7 +60,7 @@ def test_ui_and_config():
     async def go(s, srv):
         for path, want in {
             "/": "<title>platform-probe</title>",
-            "/app.js": "runExperiment",
+            "/app.js": "renderCategory",
             "/api/config": '"host": "probe.example"',
             "/healthz": "ok",
             "/style.css": "prefers-color-scheme",
@@ -72,5 +72,66 @@ def test_ui_and_config():
             assert r.status == 200 and want in body, (path, r.status, body[:200])
         async with s.post(srv.make_url("/api/experiments/nope")) as r:
             assert r.status == 404
+
+    run(with_console(go))
+
+
+def probe_with_categories() -> Probe:
+    cfg = parse_config({"release": "probe", "namespace": "ns", "testPodPrefix": "probe-platform-probe-test-"})
+    return Probe(
+        cfg,
+        checks=[
+            Check("gateway-a", GROUP_GATEWAY, "a", _pass),
+            Check("gateway-b", GROUP_GATEWAY, "b", _fail),
+            Check("mesh-c", GROUP_MESH, "c", _pass),
+        ],
+    )
+
+
+def test_run_one_category_keeps_the_others():
+    async def go():
+        srv = TestServer(console.app(probe_with_categories()))
+        await srv.start_server()
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.get(srv.make_url("/api/config")) as r:
+                    cfg = await r.json()
+                assert cfg["categories"] == [
+                    {"id": "gateway", "name": GROUP_GATEWAY},
+                    {"id": "mesh", "name": GROUP_MESH},
+                ]
+                assert {c["category"] for c in cfg["checks"]} == {"gateway", "mesh"}
+                assert cfg["testPodPrefix"] == "probe-platform-probe-test-"
+
+                async with s.post(srv.make_url("/api/run?wait=true")) as r:
+                    assert (await r.json())["total"] == 3
+                async with s.post(srv.make_url("/api/run?wait=true&groups=mesh")) as r:
+                    rep = await r.json()
+                assert r.status == 200 and rep["total"] == 1 and rep["categories"] == ["mesh"], rep
+                assert [x["id"] for x in rep["results"]] == ["mesh-c"]
+
+                # The report's latest results still hold the gateway checks from the first run.
+                async with s.get(srv.make_url("/api/report")) as r:
+                    rep = await r.json()
+                assert [x["id"] for x in rep["latest"]] == ["gateway-a", "gateway-b", "mesh-c"]
+                assert all(x["at"] for x in rep["latest"])
+
+                async with s.post(srv.make_url("/api/run?groups=storage")) as r:
+                    err = await r.json()
+                assert (
+                    r.status == 400 and "no such category: storage" in err["error"] and "gateway, mesh" in err["error"]
+                )
+        finally:
+            await srv.close()
+
+    run(go())
+
+
+def test_ui_has_the_sidebar_layout():
+    async def go(s, srv):
+        async with s.get(srv.make_url("/")) as r:
+            html = await r.text()
+        for want in ('id="nav-cats"', 'id="attention"', 'id="view-category"', 'id="cat-run"', 'href="#/experiments"'):
+            assert want in html, want
 
     run(with_console(go))

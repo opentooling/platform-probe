@@ -87,6 +87,12 @@ class Check:
     run: CheckFn
     suite: str = CONNECTIVITY
 
+    @property
+    def category(self) -> str:
+        """What the console and `helm test` run separately: the check ID's prefix, one per group
+        (platform, gateway, mesh, ingress, workloads, storage, ...)."""
+        return self.id.split("-", 1)[0]
+
 
 _registry: list[Check] = []
 
@@ -118,6 +124,12 @@ class Result:
     detail: str = ""
     hint: str = ""
     duration_ms: int = 0
+    # When the check finished.
+    at: datetime | None = None
+
+    @property
+    def category(self) -> str:
+        return self.id.split("-", 1)[0]
 
     def to_dict(self) -> dict:
         d = {"id": self.id, "group": self.group, "name": self.name, "status": str(self.status)}
@@ -126,6 +138,8 @@ class Result:
         if self.hint:
             d["hint"] = self.hint
         d["durationMs"] = self.duration_ms
+        if self.at:
+            d["at"] = _timestamp(self.at)
         return d
 
     @classmethod
@@ -138,6 +152,7 @@ class Result:
             detail=d.get("detail", ""),
             hint=d.get("hint", ""),
             duration_ms=int(d.get("durationMs", 0)),
+            at=datetime.fromisoformat(d["at"].replace("Z", "+00:00")) if d.get("at") else None,
         )
 
 
@@ -156,6 +171,8 @@ class Report:
     failed: int = 0
     skipped: int = 0
     total: int = 0
+    # The categories this run covers; empty = all of them.
+    categories: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         d: dict = {"running": self.running, "startedAt": _timestamp(self.started_at) or "0001-01-01T00:00:00Z"}
@@ -168,6 +185,7 @@ class Report:
             failed=self.failed,
             skipped=self.skipped,
             total=self.total,
+            categories=self.categories,
         )
         return d
 
@@ -181,6 +199,7 @@ class Report:
             failed=int(d.get("failed", 0)),
             skipped=int(d.get("skipped", 0)),
             total=int(d.get("total", 0)),
+            categories=list(d.get("categories") or []),
         )
 
 
@@ -292,6 +311,8 @@ class Probe:
         self.run_id = ""
         self.state: dict = {}
         self._report = Report()
+        self._run_checks: list[Check] = list(self.checks)
+        self._latest: dict[str, Result] = {}
         self._gateway: aiohttp.ClientSession | None = None
         self._mesh: aiohttp.ClientSession | None = None
         self.token_value = ""
@@ -344,19 +365,39 @@ class Probe:
 
     # --- running ---
 
-    def begin(self) -> bool:
-        """Start a new report. False if a run is already in progress."""
+    def categories(self) -> list[dict[str, str]]:
+        """The categories of the checks this probe runs, in run order: [{id, name}]."""
+        seen: dict[str, str] = {}
+        for c in self.checks:
+            seen.setdefault(c.category, c.group)
+        return [{"id": k, "name": v} for k, v in seen.items()]
+
+    def begin(self, categories: list[str] | None = None) -> bool:
+        """Start a new report, for the given categories or all of them. False if a run is
+        already in progress; ValueError for a category this probe doesn't have."""
         if self._report.running:
             return False
-        self._report = Report(running=True, started_at=datetime.now(UTC), total=len(self.checks))
+        wanted = [c for c in categories or [] if c]
+        unknown = sorted(set(wanted) - {c["id"] for c in self.categories()})
+        if unknown:
+            raise ValueError(f"no such category: {', '.join(unknown)}")
+        self._run_checks = [c for c in self.checks if not wanted or c.category in wanted]
+        self._report = Report(
+            running=True, started_at=datetime.now(UTC), total=len(self._run_checks), categories=wanted
+        )
         return True
+
+    def latest(self) -> list[Result]:
+        """The most recent result of every check, whichever run it came from, in run order."""
+        return [self._latest[c.id] for c in self.checks if c.id in self._latest]
 
     async def execute(self) -> None:
         """Run every check in order, into the report begin() started."""
         rep = self._report
         self.run_id, self.state = new_id(), {}
         scratch = None
-        if self.cfg.write_suites() and any(c.suite != CONNECTIVITY for c in self.checks):
+        checks = self._run_checks
+        if self.cfg.write_suites() and any(c.suite != CONNECTIVITY for c in checks):
             from . import scratch
         try:
             if scratch:
@@ -365,14 +406,13 @@ class Probe:
                     await scratch.sweep(self)
                 except Exception:
                     log.exception("cleaning up the scratch namespace")
-            for c in self.checks:
+            for c in checks:
                 start = time.monotonic()
                 out = await self._safe_run(c)
-                rep.results.append(
-                    Result(
-                        c.id, c.group, c.name, out.status, out.detail, out.hint, int((time.monotonic() - start) * 1000)
-                    )
-                )
+                ms = int((time.monotonic() - start) * 1000)
+                res = Result(c.id, c.group, c.name, out.status, out.detail, out.hint, ms, datetime.now(UTC))
+                rep.results.append(res)
+                self._latest[c.id] = res
                 if out.status == Status.PASS:
                     rep.passed += 1
                 elif out.status == Status.FAIL:
@@ -389,9 +429,10 @@ class Probe:
             rep.finished_at = datetime.now(UTC)
             rep.duration_ms = int((rep.finished_at - rep.started_at).total_seconds() * 1000)
 
-    async def run(self) -> bool:
-        """Run every check. Only one run at a time; a second call returns False."""
-        if not self.begin():
+    async def run(self, categories: list[str] | None = None) -> bool:
+        """Run every check, or those of the given categories. Only one run at a time; a second
+        call returns False."""
+        if not self.begin(categories):
             return False
         await self.execute()
         return True
