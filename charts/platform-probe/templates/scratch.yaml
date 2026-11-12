@@ -41,11 +41,17 @@ rules:
   - apiGroups: ["route.openshift.io"]
     resources: ["routes"]
     verbs: ["create", "get", "list", "delete"]
-  {{- if .Values.suites.ingress.certManager.issuer.name }}
+  {{- end }}
+  {{- if or (and .Values.suites.ingress.enabled .Values.suites.ingress.certManager.issuer.name) .Values.suites.pki.enabled }}
+  # Test Certificates (ingress' cert-manager check, the internal CA).
   - apiGroups: ["cert-manager.io"]
     resources: ["certificates"]
     verbs: ["create", "get", "list", "delete"]
   {{- end }}
+  {{- if and .Values.suites.pki.enabled (eq .Values.suites.pki.issuer.kind "Issuer") }}
+  - apiGroups: ["cert-manager.io"]
+    resources: ["issuers"]
+    verbs: ["get"]
   {{- end }}
   {{- if .Values.suites.metallb.enabled }}
   # Read the MetalLB test Service's address. Reading only: creating Services isn't allowed.
@@ -111,6 +117,27 @@ spec:
       port: 8080
       targetPort: 8080
       protocol: TCP
+    - name: https
+      port: 8443
+      targetPort: 8443
+      protocol: TCP
+{{- end }}
+{{- if .Values.suites.pki.enabled }}
+---
+# The internal CA checks' Service: each run starts a pod serving the certificate the CA issued
+# for this Service's cluster names, and connects to it by them.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fn }}-pki
+  namespace: {{ $ns }}
+  labels:
+    {{- include "platform-probe.labels" . | nindent 4 }}
+spec:
+  selector:
+    platform-probe/release: {{ .Release.Name }}
+    platform-probe/pki-server: "true"
+  ports:
     - name: https
       port: 8443
       targetPort: 8443

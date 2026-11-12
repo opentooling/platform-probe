@@ -31,7 +31,7 @@ Gateway ──► frontend ──► catalog v1 (90%) ──► pricing
 
 | Group | Checks |
 |---|---|
-| Platform | Kuadrant ready · Gateway programmed · probe routes accepted · AuthPolicies and RateLimitPolicies enforced · sidecars injected |
+| Connectivity Link | Kuadrant ready · Gateway programmed · probe routes accepted · AuthPolicies and RateLimitPolicies enforced · sidecars injected |
 | API gateway | TLS certificate (issuer, expiry) · HTTP→HTTPS redirect · host and path routing · default deny · API keys (missing, wrong, valid) · OIDC token (valid, tampered) · claim-based authorization (only `admin` may POST) · gateway → app mTLS · header match · weighted split · URL rewrite and header filters · request mirroring · route timeout · route rate limit · per-caller limits by plan |
 | Service mesh | SPIFFE identity on every hop · request ID propagation · STRICT mTLS rejects plaintext · AuthorizationPolicy · east-west weighted split and header routing · retries · fault injection (abort, delay) · per-hop timeout · outlier detection · egress `REGISTRY_ONLY` · NetworkPolicy blocks gateway bypass |
 
@@ -40,6 +40,7 @@ Platform suites, when switched on ([details](#platform-suites)):
 | Group | Checks |
 |---|---|
 | Ingress & certificates | default IngressController available · edge Route with a trusted certificate that isn't about to expire, HTTP redirected to HTTPS · reencrypt Route to a service-CA certificate · passthrough Route ends TLS at the pod · cert-manager issues a certificate |
+| Internal CA | the cert-manager issuer of the cluster-local CA is ready · it issues a certificate for a Service's `<svc>.<ns>.svc` and `.svc.cluster.local` names · a pod serving it is trusted by another pod that only has the CA bundle workloads get |
 | Workload security | a tenant pod gets the expected SCC and a UID from the namespace's range · privileged, root, hostPath and hostNetwork pods refused · ResourceQuota refuses a pod over quota · a ClusterResourceQuota covers the namespace and refuses a pod over it · LimitRange sets defaults and refuses a container over its max |
 | Storage | exactly one default StorageClass · for each StorageClass: a PVC binds and data written by one pod is read by another · expansion · snapshot restored to a new PVC with the data |
 | MetalLB | controller and speakers ready on every node · every address pool advertised (L2 or BGP), with free addresses, BGP sessions established · a LoadBalancer Service has an address from the expected pool, is announced, and carries traffic from a pod |
@@ -55,6 +56,10 @@ a category's page shows its checks, failures first, and runs just that category.
 category keeps the latest results of the others. Each view has its own address
 (`#/storage`, `#/experiments`) to bookmark.
 
+The Connectivity Link status checks (Kuadrant, the Gateway, the probe's routes, policies and
+sidecars) are the `rhcl` category; until chart 0.1.11 it was called `platform`, so update
+`tests.categories` and `--filter` names that use it.
+
 `helm test` runs one pod per category, one after another, so a plain `helm test` runs
 everything and fails if anything failed; run one category with `--filter`:
 
@@ -67,10 +72,10 @@ run only some categories, list them in the values:
 
 ```yaml
 tests:
-  categories: [platform, gateway, mesh]   # empty = every enabled category
+  categories: [rhcl, gateway, mesh]   # empty = every enabled category
 ```
 
-The categories are `platform`, `gateway`, `mesh`, and each enabled suite: `ingress`,
+The categories are `rhcl` (Connectivity Link status), `gateway`, `mesh`, and each enabled suite: `ingress`, `pki`,
 `workloads`, `storage`, `observability`, `argocd`, `metallb`. From a terminal or CI, `POST
 /api/run?groups=storage,ingress` runs several, as does `platform-probe check --groups
 storage,ingress`.
@@ -134,7 +139,7 @@ The values you are most likely to set:
 | `mesh.strictMTLS`, `.authorizationPolicies`, `.trafficManagement` | `true` | Mesh features to set up and check |
 | `mesh.egress.registryOnly` | `true` | Limit the console to the mesh registry |
 | `networkPolicies.enabled` | `true` | Ingress NetworkPolicies for the demo app |
-| `suites.ingress`, `.workloads`, `.storage`, `.observability`, `.argocd`, `.metallb` | off | [Platform suites](#platform-suites) to run |
+| `suites.ingress`, `.pki`, `.workloads`, `.storage`, `.observability`, `.argocd`, `.metallb` | off | [Platform suites](#platform-suites) to run |
 | `scratch.namespace`, `scratch.create` | `<namespace>-scratch`, `true` | Where the platform suites create their test objects |
 | `scratch.labels`, `scratch.annotations` | `{}` | Labels and annotations for the scratch namespace the chart creates |
 | `extraObjects` | `[]` | Extra manifests, see below |
@@ -230,6 +235,25 @@ Services, so this shows MetalLB serving an existing Service, not assigning a new
 the Service holds one address while the release is installed. Traffic from a pod to the address
 may be handled inside the cluster's network, so the announcement is what shows the address is
 reachable from outside.
+
+```yaml
+suites:
+  pki:
+    enabled: true
+    issuer: { name: cluster-ca, kind: ClusterIssuer }      # the cluster-local CA's issuer
+    trustBundle: { configMap: internal-ca-bundle, key: trust-bundle.pem }  # what workloads trust
+    issuerContains: cluster-ca                              # optional
+```
+
+The Internal CA suite checks the CA that issues certificates for in-cluster names. It requests
+a Certificate for a Service the chart creates in the scratch namespace, covering
+`<svc>.<ns>.svc` and `<svc>.<ns>.svc.<clusterDomain>` (plus a name unique to the run, so the
+issuer really issues one every run, into one Secret per release), starts a pod that serves it,
+and connects to it by both names from another pod. That pod trusts only the CA bundle workloads
+are given: `trustBundle`, typically a trust-manager Bundle's ConfigMap in the namespace, or by
+default the scratch namespace's CA bundle. So a CA that issues fine but that workloads don't
+trust fails, with the bundle it tried named. The console may read the one ClusterIssuer named
+(or Issuer, in the scratch namespace) and create Certificates in the scratch namespace.
 
 They test from a tenant's side, so they need to create things: pods, Routes, PVCs and
 snapshots, a cert-manager Certificate. (The Service the Routes point at comes with the chart:

@@ -8,7 +8,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 from conftest import GATEWAY_HOST, run
 
-from platform_probe.checks import gateway, mesh, platform
+from platform_probe.checks import gateway, mesh, rhcl
 from platform_probe.config import ConfigError, Limit, load_config, parse_config
 from platform_probe.durations import format_duration, parse_duration
 from platform_probe.junit import junit
@@ -242,7 +242,7 @@ def test_platform_checks_without_cluster(tmp_path):
     async def go():
         p = Probe(make_config(tmp_path), checks=[])
         try:
-            return await platform.check_kuadrant(p)
+            return await rhcl.check_kuadrant(p)
         finally:
             await p.close()
 

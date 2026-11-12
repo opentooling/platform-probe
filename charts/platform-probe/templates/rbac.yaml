@@ -30,6 +30,12 @@ rules:
     resources: ["ingresscontrollers"]
     verbs: ["get"]
   {{- end }}
+  {{- if and .Values.suites.pki.enabled (eq .Values.suites.pki.issuer.kind "ClusterIssuer") }}
+  - apiGroups: ["cert-manager.io"]
+    resources: ["clusterissuers"]
+    resourceNames: [{{ .Values.suites.pki.issuer.name | quote }}]
+    verbs: ["get"]
+  {{- end }}
   {{- if .Values.suites.storage.enabled }}
   - apiGroups: ["storage.k8s.io"]
     resources: ["storageclasses"]

@@ -113,6 +113,16 @@
     "argocd" (dict
       "enabled" $v.suites.argocd.enabled
       "instances" $argoInstances)
+    "pki" (dict
+      "enabled" $v.suites.pki.enabled
+      "issuer" (dict "name" $v.suites.pki.issuer.name "kind" $v.suites.pki.issuer.kind)
+      "service" (ternary (printf "%s-pki" $fn) "" $v.suites.pki.enabled)
+      "secret" (ternary (printf "%s-pki-tls" $fn) "" $v.suites.pki.enabled)
+      "clusterDomain" $v.suites.pki.clusterDomain
+      "trustConfigMap" $v.suites.pki.trustBundle.configMap
+      "trustKey" $v.suites.pki.trustBundle.key
+      "issuerContains" $v.suites.pki.issuerContains
+      "timeout" $v.suites.pki.timeout)
     "metallb" (dict
       "enabled" $v.suites.metallb.enabled
       "namespace" $v.suites.metallb.namespace

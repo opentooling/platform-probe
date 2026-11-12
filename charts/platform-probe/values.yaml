@@ -247,6 +247,25 @@ suites:
       endpoint: ""
     # How long a signal may take to show up in Grafana.
     timeout: 3m
+  # Internal CA: a cluster-local CA, through a cert-manager issuer, issues a certificate for a
+  # Service's cluster names (<svc>.<ns>.svc and <svc>.<ns>.svc.<clusterDomain>), a pod serves
+  # it behind a Service the chart creates in the scratch namespace, and another pod connects
+  # by those names trusting only the CA bundle workloads are given.
+  pki:
+    enabled: false
+    issuer:
+      name: ""
+      kind: ClusterIssuer   # or Issuer, in the scratch namespace
+    clusterDomain: cluster.local
+    # The CA bundle workloads trust, as a ConfigMap in the scratch namespace (e.g. a
+    # trust-manager Bundle's target). Empty = the scratch namespace's CA bundle (trustedCA).
+    trustBundle:
+      configMap: ""
+      key: ca.crt
+    # If set, the served certificate's issuer must contain this, e.g. "cluster-ca".
+    issuerContains: ""
+    # How long issuing, and starting the test server, may take.
+    timeout: 2m
   # MetalLB: controller and speakers ready, every address pool advertised (L2 or BGP) with
   # addresses left and BGP sessions up, and a LoadBalancer Service that gets an address from
   # the pool, is announced and carries traffic from a pod. The chart creates that Service in the

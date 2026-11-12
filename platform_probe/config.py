@@ -276,6 +276,27 @@ class MetalLBSuite:
 
 
 @dataclass
+class PkiSuite:
+    """A cluster-local CA, through cert-manager, for <service>.<namespace>.svc names."""
+
+    enabled: bool = False
+    issuer: IssuerRef = field(default_factory=IssuerRef)
+    # The ClusterIP Service the chart creates in the scratch namespace, and the Secret the test
+    # Certificate is written to (one per release, reissued every run).
+    service: str = ""
+    secret: str = ""
+    cluster_domain: str = "cluster.local"
+    # The ConfigMap in the scratch namespace that holds the CA workloads trust (e.g. a
+    # trust-manager Bundle's target), and its key. Empty = the scratch namespace's CA bundle.
+    trust_config_map: str = ""
+    trust_key: str = "ca.crt"
+    # If set, the served certificate's issuer must contain this.
+    issuer_contains: str = ""
+    # How long issuing, and starting the test server, may take.
+    timeout: float = _duration()
+
+
+@dataclass
 class Suites:
     ingress: IngressSuite = field(default_factory=IngressSuite)
     workloads: WorkloadsSuite = field(default_factory=WorkloadsSuite)
@@ -283,6 +304,7 @@ class Suites:
     observability: ObservabilitySuite = field(default_factory=ObservabilitySuite)
     argocd: ArgoSuite = field(default_factory=ArgoSuite)
     metallb: MetalLBSuite = field(default_factory=MetalLBSuite)
+    pki: PkiSuite = field(default_factory=PkiSuite)
 
 
 @dataclass
@@ -320,6 +342,7 @@ class Config:
             or s.storage.enabled
             or s.observability.enabled
             or s.metallb.enabled
+            or s.pki.enabled
             or deploys
         )
 
@@ -345,6 +368,8 @@ class Config:
             self.suites.storage.pod_timeout = 180.0
         if not self.suites.observability.timeout:
             self.suites.observability.timeout = 180.0
+        if not self.suites.pki.timeout:
+            self.suites.pki.timeout = 120.0
         m = self.suites.metallb
         m.bgp_namespace = m.bgp_namespace or m.namespace
         if not m.timeout:

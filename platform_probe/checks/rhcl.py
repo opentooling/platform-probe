@@ -1,4 +1,4 @@
-"""Platform: the status of Kuadrant, the Gateway, the probe's routes, policies and pods, read
+"""Connectivity Link: the status of Kuadrant, the Gateway, the probe's routes, policies and pods, read
 from the Kubernetes API."""
 
 from __future__ import annotations
@@ -6,14 +6,14 @@ from __future__ import annotations
 from urllib.parse import quote
 
 from .. import kube
-from ..runner import GROUP_PLATFORM, Outcome, Probe, check, failed, first_non_empty, passed
+from ..runner import GROUP_RHCL, Outcome, Probe, check, failed, first_non_empty, passed
 
 
 def instance_selector(p: Probe) -> str:
     return "labelSelector=" + quote("app.kubernetes.io/instance=" + p.cfg.release, safe="")
 
 
-@check("platform-kuadrant", GROUP_PLATFORM, "Kuadrant ready")
+@check("rhcl-kuadrant", GROUP_RHCL, "Kuadrant ready")
 async def check_kuadrant(p: Probe) -> Outcome:
     ns = p.cfg.kuadrant.namespace
     try:
@@ -31,7 +31,7 @@ async def check_kuadrant(p: Probe) -> Outcome:
     return passed(f"kuadrant/{kube.name(its[0])} in {ns}")
 
 
-@check("platform-gateway", GROUP_PLATFORM, "Gateway programmed")
+@check("rhcl-gateway", GROUP_RHCL, "Gateway programmed")
 async def check_gateway_programmed(p: Probe) -> Outcome:
     g = p.cfg.gateway
     try:
@@ -45,7 +45,7 @@ async def check_gateway_programmed(p: Probe) -> Outcome:
     return passed(f"{g.namespace}/{g.name}, {len(listeners) if isinstance(listeners, list) else 0} listeners")
 
 
-@check("platform-routes", GROUP_PLATFORM, "Probe routes accepted by the gateway")
+@check("rhcl-routes", GROUP_RHCL, "Probe routes accepted by the gateway")
 async def check_routes(p: Probe) -> Outcome:
     try:
         lst = await p.kube.get(
@@ -77,7 +77,7 @@ async def check_routes(p: Probe) -> Outcome:
     return passed(f"{len(routes)} HTTPRoutes accepted")
 
 
-@check("platform-policies", GROUP_PLATFORM, "Probe AuthPolicies and RateLimitPolicies enforced")
+@check("rhcl-policies", GROUP_RHCL, "Probe AuthPolicies and RateLimitPolicies enforced")
 async def check_policies(p: Probe) -> Outcome:
     bad, good = [], []
     for kind in ("authpolicies", "ratelimitpolicies"):
@@ -105,7 +105,7 @@ def container_names(raw) -> list[str]:
     return [c["name"] for c in raw if isinstance(c, dict) and isinstance(c.get("name"), str)]
 
 
-@check("platform-sidecars", GROUP_PLATFORM, "Probe pods have the istio-proxy sidecar")
+@check("rhcl-sidecars", GROUP_RHCL, "Probe pods have the istio-proxy sidecar")
 async def check_sidecars(p: Probe) -> Outcome:
     sel = quote(f"app.kubernetes.io/instance={p.cfg.release},platform-probe/mesh=true", safe="")
     try:

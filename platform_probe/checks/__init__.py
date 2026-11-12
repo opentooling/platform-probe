@@ -2,10 +2,10 @@
 imported in the order their groups run. A new suite is a new module here, plus a switch under
 suites.* in the chart values and config.py.
 
-connectivity (always on): platform, gateway, mesh. Rate-limit checks wait for their window to
+connectivity (always on): rhcl (Connectivity Link status), gateway, mesh. Rate-limit checks wait for their window to
 expire first, so they don't count requests from the checks before them.
-ingress, workloads, storage, observability, argocd, metallb (off by default): create test objects in the scratch namespace.
+ingress, pki, workloads, storage, observability, argocd, metallb (off by default): create test objects in the scratch namespace.
 """
 
-from . import platform, gateway, mesh  # noqa: F401, I001 - order matters: it is the run order
-from . import ingress, workloads, storage, observability, argocd, metallb  # noqa: F401
+from . import rhcl, gateway, mesh  # noqa: F401, I001 - order matters: it is the run order
+from . import ingress, pki, workloads, storage, observability, argocd, metallb  # noqa: F401

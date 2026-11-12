@@ -98,14 +98,14 @@ platform-probe/role: {{ .role }}
 {{- if $s.argocd.enabled }}
 {{- range $s.argocd.instances }}{{ if and .deploy .deploy.enabled }}{{ $argoDeploy = true }}{{ end }}{{ end }}
 {{- end }}
-{{- if or $s.ingress.enabled $s.workloads.enabled $s.storage.enabled $s.observability.enabled $s.metallb.enabled $argoDeploy }}true{{ end }}
+{{- if or $s.ingress.enabled $s.pki.enabled $s.workloads.enabled $s.storage.enabled $s.observability.enabled $s.metallb.enabled $argoDeploy }}true{{ end }}
 {{- end }}
 
 {{/* The check categories that run, in run order: one `helm test` pod each. */}}
 {{- define "platform-probe.categories" -}}
 {{- $s := .Values.suites }}
-{{- $c := list "platform" "gateway" "mesh" }}
-{{- range $name := list "ingress" "workloads" "storage" "observability" "argocd" "metallb" }}
+{{- $c := list "rhcl" "gateway" "mesh" }}
+{{- range $name := list "ingress" "pki" "workloads" "storage" "observability" "argocd" "metallb" }}
 {{- if (index $s $name).enabled }}{{ $c = append $c $name }}{{ end }}
 {{- end }}
 {{- join "," $c }}
@@ -149,6 +149,9 @@ capabilities:
 {{- $o := .Values.suites.observability }}
 {{- if and $o.enabled (or (not $o.grafana.url) (not $o.grafana.token.existingSecret)) }}
 {{- fail "suites.observability.enabled needs suites.observability.grafana.url and .grafana.token.existingSecret" }}
+{{- end }}
+{{- if and .Values.suites.pki.enabled (not .Values.suites.pki.issuer.name) }}
+{{- fail "suites.pki.enabled needs suites.pki.issuer.name: the cert-manager issuer of the cluster-local CA" }}
 {{- end }}
 {{- if .Values.suites.argocd.enabled }}
 {{- range .Values.suites.argocd.instances }}

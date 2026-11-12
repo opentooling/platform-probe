@@ -35,6 +35,14 @@ suites:
     certManager:
       issuer:
         name: internal-ca
+  pki:
+    enabled: true
+    issuer:
+      name: cluster-ca
+    trustBundle:
+      configMap: internal-ca-bundle
+      key: trust-bundle.pem
+    issuerContains: cluster-ca
   workloads:
     enabled: true
     expectQuota: true

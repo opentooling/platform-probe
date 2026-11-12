@@ -40,7 +40,7 @@ class Status(StrEnum):
 
 
 # Groups, in the order they run and are shown.
-GROUP_PLATFORM = "Platform"
+GROUP_RHCL = "Connectivity Link"
 GROUP_GATEWAY = "API gateway"
 GROUP_MESH = "Service mesh"
 GROUP_INGRESS = "Ingress & certificates"
@@ -49,6 +49,7 @@ GROUP_STORAGE = "Storage"
 GROUP_OBSERVABILITY = "Observability"
 GROUP_ARGOCD = "Argo CD"
 GROUP_METALLB = "MetalLB"
+GROUP_PKI = "Internal CA"
 
 # The connectivity suite (the three groups above) always runs; the others are switched on in
 # the chart's suites.* values.

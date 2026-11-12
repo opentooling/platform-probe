@@ -46,14 +46,14 @@ def go(p: Probe, fn):
 
 def test_suites_off_by_default():
     p = make_probe(FakeKube(None))
-    assert {c.group for c in p.checks} == {"Platform", "API gateway", "Service mesh"}
+    assert {c.group for c in p.checks} == {"Connectivity Link", "API gateway", "Service mesh"}
     assert p.cfg.scratch.namespace == NS and not p.cfg.write_suites()
 
 
 def test_enabled_suites_add_their_checks_in_order():
     p = make_probe(FakeKube(None), ingress={"enabled": True}, storage={"enabled": True})
     groups = list(dict.fromkeys(c.group for c in p.checks))
-    assert groups == ["Platform", "API gateway", "Service mesh", GROUP_INGRESS, GROUP_STORAGE]
+    assert groups == ["Connectivity Link", "API gateway", "Service mesh", GROUP_INGRESS, GROUP_STORAGE]
 
 
 @pytest.mark.parametrize(

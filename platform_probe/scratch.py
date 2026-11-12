@@ -129,18 +129,13 @@ def pod_spec(p: Probe, container: dict, volumes: list[dict] | None = None) -> di
     return spec
 
 
-def ca_volume(p: Probe) -> tuple[list[dict], list[dict]]:
-    """The CA bundle ConfigMap as a volume and its mount, or nothing without one."""
-    if not p.cfg.scratch.ca_config_map:
+def ca_volume(p: Probe, ca: tuple[str, str] | None = None) -> tuple[list[dict], list[dict]]:
+    """A CA bundle ConfigMap as a volume and its mount: the given (name, key), else the scratch
+    namespace's, or nothing without one."""
+    cm, key = ca or (p.cfg.scratch.ca_config_map, p.cfg.scratch.ca_key)
+    if not cm:
         return [], []
-    vol = {
-        "name": "ca",
-        "configMap": {
-            "name": p.cfg.scratch.ca_config_map,
-            "optional": True,
-            "items": [{"key": p.cfg.scratch.ca_key, "path": "ca-bundle.crt"}],
-        },
-    }
+    vol = {"name": "ca", "configMap": {"name": cm, "optional": True, "items": [{"key": key, "path": "ca-bundle.crt"}]}}
     return [vol], [{"name": "ca", "mountPath": CA_DIR, "readOnly": True}]
 
 
@@ -189,9 +184,11 @@ async def run_task(
     volumes: list[dict] | None = None,
     mounts: list[dict] | None = None,
     timeout: float = 120.0,
+    ca: tuple[str, str] | None = None,
 ) -> PodResult:
-    """Run one task pod to completion and return its result. The pod is deleted afterwards."""
-    ca_vols, ca_mounts = ca_volume(p)
+    """Run one task pod to completion and return its result. The pod is deleted afterwards.
+    ca = (ConfigMap, key) to trust instead of the scratch namespace's CA bundle."""
+    ca_vols, ca_mounts = ca_volume(p, ca)
     pod_name = name(p, suffix)
     pod = {
         "apiVersion": "v1",

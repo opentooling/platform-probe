@@ -31,7 +31,10 @@ class FakeKube:
         self.route_admitted = True
         self.calls: list[tuple[str, str]] = []
         self.emitted: list[dict] = []
-        self.argo_result: dict | None = None  # a test Application's status instead of Synced/Healthy
+        self.argo_result: dict | None = None
+        self.cert_status: dict | None = (
+            None  # a Certificate's status instead of Ready  # a test Application's status instead of Synced/Healthy
+        )
 
     # --- storage ---
 
@@ -49,6 +52,8 @@ class FakeKube:
             "namespaces",
             "appliedclusterresourcequotas",
             "argocds",
+            "clusterissuers",
+            "issuers",
             "deployments",
             "daemonsets",
             "ipaddresspools",
@@ -154,7 +159,10 @@ class FakeKube:
                 "resources": [{"kind": "ConfigMap", "name": "platform-probe-argocd"}],
             }
         elif coll.endswith("/certificates") and not obj.get("status"):
-            obj["status"] = {"conditions": [{"type": "Ready", "status": "True"}], "notAfter": "2027-02-07T00:00:00Z"}
+            obj["status"] = copy.deepcopy(self.cert_status) or {
+                "conditions": [{"type": "Ready", "status": "True"}],
+                "notAfter": "2027-02-07T00:00:00Z",
+            }
         elif coll.endswith("/volumesnapshots") and not obj.get("status"):
             src = obj["spec"]["source"]["persistentVolumeClaimName"]
             shutil.copytree(
@@ -172,7 +180,7 @@ class FakeKube:
 
     def _run_pod(self, pod: dict) -> dict:
         labels = pod["metadata"].get("labels") or {}
-        if labels.get("platform-probe/backend") == "true":
+        if labels.get("platform-probe/backend") == "true" or labels.get("platform-probe/pki-server") == "true":
             return {"phase": "Running", "conditions": [{"type": "Ready", "status": "True"}]}
         if self.pod_status is not None:
             return copy.deepcopy(self.pod_status)
