@@ -42,7 +42,8 @@ rules:
     resources: ["routes"]
     verbs: ["create", "get", "list", "delete"]
   {{- end }}
-  {{- if or (and .Values.suites.ingress.enabled .Values.suites.ingress.certManager.issuer.name) .Values.suites.pki.enabled }}
+  {{- $cm := .Values.suites.ingress.certManager }}
+  {{- if or (and .Values.suites.ingress.enabled (or $cm.issuer.name $cm.policy.name)) .Values.suites.pki.enabled }}
   # Test Certificates (ingress' cert-manager check, the internal CA).
   - apiGroups: ["cert-manager.io"]
     resources: ["certificates"]

@@ -40,6 +40,8 @@ suites:
       expect:
         commonNamePattern: '[a-z0-9-]+\.apps\.example\.com'
         dnsNamePattern: '[a-z0-9.-]+\.apps\.example\.com'
+      policy:
+        name: require-certificate-names
   pki:
     enabled: true
     issuer:

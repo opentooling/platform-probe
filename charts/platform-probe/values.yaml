@@ -201,6 +201,12 @@ suites:
       expect:
         commonNamePattern: ""
         dnsNamePattern: ""
+      # The Kyverno ClusterPolicy that enforces those names on Certificates. Set, the policy must
+      # be Ready and in Enforce mode, and a Certificate breaking it (no common name, the DNS name
+      # below) must be refused; a server-side dry run, so nothing is created.
+      policy:
+        name: ""
+        badDnsName: "probe-{run}.policy-test.invalid"
   # SCC and Pod Security: the UID and SCC a tenant pod gets, and that privileged, root,
   # hostPath and hostNetwork pods are refused (server-side dry runs: nothing is created).
   workloads:

@@ -39,7 +39,7 @@ Platform suites, when switched on ([details](#platform-suites)):
 
 | Group | Checks |
 |---|---|
-| Ingress & certificates | default IngressController available · edge Route with a trusted certificate that isn't about to expire, HTTP redirected to HTTPS · reencrypt Route to a service-CA certificate · passthrough Route ends TLS at the pod · cert-manager (e.g. a Vault issuer) issues a certificate whose common name and DNS names follow your patterns |
+| Ingress & certificates | default IngressController available · edge Route with a trusted certificate that isn't about to expire, HTTP redirected to HTTPS · reencrypt Route to a service-CA certificate · passthrough Route ends TLS at the pod · cert-manager (e.g. a Vault issuer) issues a certificate whose common name and DNS names follow your patterns · the Kyverno policy on certificate names refuses one that breaks them |
 | Internal CA | the cert-manager issuer of the cluster-local CA is ready · it issues a certificate for a Service's `<svc>.<ns>.svc` and `.svc.cluster.local` names · a pod serving it is trusted by another pod that only has the CA bundle workloads get |
 | Workload security | a tenant pod gets the expected SCC and a UID from the namespace's range · privileged, root, hostPath and hostNetwork pods refused · ResourceQuota refuses a pod over quota · a ClusterResourceQuota covers the namespace and refuses a pod over it · LimitRange sets defaults and refuses a container over its max |
 | Storage | exactly one default StorageClass · for each StorageClass: a PVC binds and data written by one pod is read by another · expansion · snapshot restored to a new PVC with the data |
@@ -251,7 +251,21 @@ suites:
         dnsNamePattern: '[a-z0-9.-]+\.apps\.example\.com'
 ```
 
-A refusal shows the names that were asked for and the issuer's answer. Once issued, a pod
+Names are often enforced by an admission policy rather than the issuer: a Kyverno
+ClusterPolicy that refuses Certificates without a common name or with names outside a pattern.
+Name it, and a separate check proves it works: the policy is Ready and in Enforce mode (in
+Audit it only reports), and a Certificate with no common name and the DNS name in
+`policy.badDnsName` is refused by it, in a server-side dry run that creates nothing:
+
+```yaml
+suites:
+  ingress:
+    certManager:
+      policy:
+        name: require-certificate-names
+```
+
+A refusal, by the issuer or by a policy, shows the names that were asked for and the answer. Once issued, a pod
 reads the certificate from its Secret, and the check fails if the common name is missing or
 off-pattern, a DNS name doesn't match, or a requested name is missing. Keep `{run}` in a name:
 it makes the issuer issue a fresh certificate every run, where fixed names may let cert-manager

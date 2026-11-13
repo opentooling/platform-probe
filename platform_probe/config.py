@@ -172,6 +172,11 @@ class IngressSuite:
     # be present) and every DNS name. Empty = not checked.
     cert_common_name_pattern: str = ""
     cert_dns_name_pattern: str = ""
+    # The Kyverno ClusterPolicy that enforces those names on Certificates. Set, its readiness
+    # is checked and a Certificate that breaks it must be refused.
+    cert_policy: str = ""
+    # The DNS name of that refused Certificate (which also has no common name).
+    cert_policy_bad_dns_name: str = "probe-{run}.policy-test.invalid"
 
 
 @dataclass

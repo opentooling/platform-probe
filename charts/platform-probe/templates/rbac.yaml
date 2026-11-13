@@ -29,6 +29,12 @@ rules:
   - apiGroups: ["operator.openshift.io"]
     resources: ["ingresscontrollers"]
     verbs: ["get"]
+  {{- with .Values.suites.ingress.certManager.policy.name }}
+  - apiGroups: ["kyverno.io"]
+    resources: ["clusterpolicies"]
+    resourceNames: [{{ . | quote }}]
+    verbs: ["get"]
+  {{- end }}
   {{- end }}
   {{- if and .Values.suites.pki.enabled (eq .Values.suites.pki.issuer.kind "ClusterIssuer") }}
   - apiGroups: ["cert-manager.io"]

@@ -25,7 +25,8 @@ class FakeKube:
         self.tmp = tmp
         self.objects: dict[str, dict[str, dict]] = {}
         # Hooks a test can replace.
-        self.admit = lambda pod: None  # dry-run pod admission: raise StatusError to refuse
+        self.admit = lambda pod: None  # dry-run admission: raise StatusError to refuse
+        self.admit_create = lambda obj: None  # admission of real creates
         self.fetch = lambda requests: {"results": []}  # what the fetch task sees
         self.pod_status = None  # a pod's status instead of running its task, e.g. stuck Pending
         self.route_admitted = True
@@ -55,6 +56,7 @@ class FakeKube:
             "namespaces",
             "appliedclusterresourcequotas",
             "argocds",
+            "clusterpolicies",
             "clusterissuers",
             "issuers",
             "deployments",
@@ -114,6 +116,7 @@ class FakeKube:
         if dry_run:
             self.admit(obj)
             return obj
+        self.admit_create(obj)
         coll = path.split("?")[0]
         if obj["metadata"]["name"] in self.objects.get(coll, {}):
             raise StatusError(409, "already exists")

@@ -176,6 +176,17 @@ def _render(template: str, p: Probe) -> str:
     return template
 
 
+def _asked(spec: dict) -> str:
+    out = f"CN {spec['commonName']}, " if spec.get("commonName") else "no CN, "
+    return out + "DNS " + ", ".join(spec.get("dnsNames") or [])
+
+
+def _policy_refusal(e: StatusError) -> bool:
+    """Whether an admission webhook (Kyverno, Gatekeeper) refused the request."""
+    m = e.message.lower()
+    return e.code in (400, 403, 422) and ("admission webhook" in m or "kyverno" in m or "policy" in m)
+
+
 def _name_problems(info: dict, cfg, requested: list[str]) -> list[str]:
     """How the issued certificate differs from what was asked for and what the patterns allow."""
     problems = []
@@ -230,6 +241,11 @@ async def check_cert_manager(p: Probe) -> Outcome:
     except StatusError as e:
         if e.code == 404:
             return failed("no certificates.cert-manager.io API", "Is cert-manager installed?")
+        if _policy_refusal(e):
+            return failed(
+                f"a policy refused the Certificate for {_asked(spec)}: {e.message[:300]}",
+                "Set suites.ingress.certManager.commonName and dnsNames to names the policy allows.",
+            )
         return failed(f"creating the Certificate: {e}")
     c = await scratch.wait_for(
         lambda: p.kube.get(scratch.path(p, "/apis/cert-manager.io/v1/certificates", cert_name)),
@@ -266,3 +282,67 @@ async def check_cert_manager(p: Probe) -> Outcome:
     if not any("{run}" in t for t in [cfg.cert_common_name, *cfg.cert_dns_names]) and cfg.cert_dns_names:
         detail += " (no name changes with {run}, so cert-manager may have kept last run's certificate)"
     return passed(detail)
+
+
+def _enforces(policy: dict) -> bool:
+    """Whether a Kyverno policy blocks violations (Enforce) rather than only reporting them, by
+    the policy-wide setting or any validate rule's own."""
+    spec = policy.get("spec") or {}
+    if str(spec.get("validationFailureAction", "")).lower() == "enforce":
+        return True
+    return any(
+        str(((r.get("validate") or {}).get("failureAction")) or "").lower() == "enforce"
+        for r in spec.get("rules") or []
+    )
+
+
+@check("ingress-cert-policy", GROUP_INGRESS, "Kyverno refuses a Certificate that breaks the naming rules", SUITE)
+async def check_cert_policy(p: Probe) -> Outcome:
+    cfg = p.cfg.suites.ingress
+    if not cfg.cert_policy:
+        return skipped("suites.ingress.certManager.policy.name is empty")
+    try:
+        pol = await p.kube.get(f"/apis/kyverno.io/v1/clusterpolicies/{cfg.cert_policy}")
+    except StatusError as e:
+        if e.code == 404:
+            return failed(
+                f"no Kyverno ClusterPolicy {cfg.cert_policy}", "Is Kyverno installed, and is the policy name right?"
+            )
+        return failed(str(e))
+    ready = kube.find(kube.status_conditions(pol), "Ready")
+    if ready.status != "True":
+        return failed(
+            f"ClusterPolicy {cfg.cert_policy} not Ready: {first_non_empty(ready.message, ready.reason, 'no status')}"
+        )
+    if not _enforces(pol):
+        return failed(
+            f"ClusterPolicy {cfg.cert_policy} is in Audit mode: violations are reported, not refused",
+            "Set validationFailureAction (or the rule's failureAction) to Enforce.",
+        )
+    spec = {
+        "secretName": f"{p.cfg.release}-probe-policy-test",
+        "dnsNames": [_render(cfg.cert_policy_bad_dns_name, p)],
+        "issuerRef": {
+            "name": cfg.cert_manager_issuer.name or "none",
+            "kind": cfg.cert_manager_issuer.kind,
+            "group": "cert-manager.io",
+        },
+    }
+    bad = {
+        "apiVersion": "cert-manager.io/v1",
+        "kind": "Certificate",
+        "metadata": scratch.meta(p, scratch.name(p, "bad-cert")),
+        "spec": spec,
+    }
+    try:
+        await p.kube.create(scratch.path(p, "/apis/cert-manager.io/v1/certificates"), bad, dry_run=True)
+    except StatusError as e:
+        if not _policy_refusal(e):
+            return failed(f"refused, but not by a policy: {e}")
+        if cfg.cert_policy not in e.message:
+            return failed(f"refused by a different policy: {e.message[:200]}")
+        return passed(f"{cfg.cert_policy} (Enforce) refused a Certificate with {_asked(spec)}")
+    return failed(
+        f"a Certificate with {_asked(spec)} was admitted",
+        f"ClusterPolicy {cfg.cert_policy} doesn't match Certificates in the scratch namespace, or its rule allows these names.",
+    )

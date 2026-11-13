@@ -550,3 +550,73 @@ def test_cert_manager_fixed_names_warn(tmp_path):
 def test_cert_manager_bad_pattern(tmp_path):
     out = go(vault_probe(FakeKube(tmp_path), cert_dns_name_pattern="probe-(["), ingress.check_cert_manager)
     assert out.status == Status.FAIL and "dnsNamePattern isn't a valid regular expression" in out.detail, out
+
+
+POLICY = "require-certificate-names"
+REFUSED = (
+    'admission webhook "validate.kyverno.svc-fail" denied the request: resource Certificate/x was blocked '
+    f"due to the following policies {POLICY}: check-names: commonName is required"
+)
+
+
+def kyverno_policy(fake, ready="True", action="Enforce"):
+    fake.put(
+        "/apis/kyverno.io/v1/clusterpolicies",
+        {
+            "metadata": {"name": POLICY},
+            "spec": {"validationFailureAction": action},
+            "status": {"conditions": [{"type": "Ready", "status": ready}]},
+        },
+    )
+
+
+def refuse_bad_certificates(obj):
+    if obj.get("kind") == "Certificate" and not obj["spec"].get("commonName"):
+        raise StatusError(400, REFUSED)
+
+
+def test_cert_policy(tmp_path):
+    fake = FakeKube(tmp_path)
+    p = vault_probe(fake)
+    assert go(p, ingress.check_cert_policy).status == Status.SKIP
+    p.cfg.suites.ingress.cert_policy = POLICY
+    out = go(p, ingress.check_cert_policy)
+    assert out.status == Status.FAIL and f"no Kyverno ClusterPolicy {POLICY}" in out.detail, out
+
+    kyverno_policy(fake, action="Audit")
+    out = go(p, ingress.check_cert_policy)
+    assert out.status == Status.FAIL and "Audit mode" in out.detail, out
+
+    kyverno_policy(fake)
+    out = go(p, ingress.check_cert_policy)
+    assert out.status == Status.FAIL and "was admitted" in out.detail, out
+
+    fake.admit = refuse_bad_certificates
+    out = go(p, ingress.check_cert_policy)
+    assert out.status == Status.PASS, out
+    assert out.detail == f"{POLICY} (Enforce) refused a Certificate with no CN, DNS probe-run1.policy-test.invalid"
+    assert not fake.items(f"/apis/cert-manager.io/v1/namespaces/{NS}/certificates"), "a dry run creates nothing"
+
+
+def test_cert_policy_rule_level_enforce(tmp_path):
+    fake = FakeKube(tmp_path)
+    fake.put(
+        "/apis/kyverno.io/v1/clusterpolicies",
+        {
+            "metadata": {"name": POLICY},
+            "spec": {"rules": [{"name": "check-names", "validate": {"failureAction": "Enforce"}}]},
+            "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+        },
+    )
+    fake.admit = refuse_bad_certificates
+    p = vault_probe(fake, cert_policy=POLICY)
+    assert go(p, ingress.check_cert_policy).status == Status.PASS
+
+
+def test_cert_manager_refused_by_policy(tmp_path):
+    fake = FakeKube(tmp_path)
+    fake.admit_create = refuse_bad_certificates
+    out = go(vault_probe(fake), ingress.check_cert_manager)
+    assert out.status == Status.FAIL, out
+    assert "a policy refused the Certificate for no CN, DNS probe-cert-run1" in out.detail and POLICY in out.detail
+    assert "commonName and dnsNames" in out.hint
