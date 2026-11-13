@@ -7,12 +7,16 @@ each Route from a pod in that namespace, the way a tenant's client would.
 
 from __future__ import annotations
 
+import re
+
 from .. import kube, scratch
 from ..kube import StatusError
-from ..runner import GROUP_INGRESS, Outcome, Probe, check, failed, first_non_empty, passed, skipped
+from ..runner import GROUP_INGRESS, Outcome, Probe, check, failed, first_non_empty, passed, q, skipped
 
 SUITE = "ingress"
 SERVICE_CA = "openshift-service-serving-signer"
+# How long a Certificate may take to be issued.
+CERT_TIMEOUT = 120.0
 
 
 @check("ingress-controller", GROUP_INGRESS, "Default IngressController available", SUITE)
@@ -165,22 +169,61 @@ async def check_passthrough(p: Probe) -> Outcome:
     return passed(f"{host}: 200 with the pod's own certificate ({SERVICE_CA})")
 
 
-@check("ingress-cert-manager", GROUP_INGRESS, "cert-manager issues a certificate", SUITE)
+def _render(template: str, p: Probe) -> str:
+    """Fill a name template's {run}, {namespace} and {release}."""
+    for key, value in (("run", p.run_id), ("namespace", scratch.ns(p)), ("release", p.cfg.release)):
+        template = template.replace("{" + key + "}", value)
+    return template
+
+
+def _name_problems(info: dict, cfg, requested: list[str]) -> list[str]:
+    """How the issued certificate differs from what was asked for and what the patterns allow."""
+    problems = []
+    cn, sans = info.get("commonName", ""), info.get("dnsNames") or []
+    if cfg.cert_common_name and not cn:
+        problems.append("no common name")
+    if cfg.cert_common_name_pattern and cn and not re.fullmatch(cfg.cert_common_name_pattern, cn):
+        problems.append(f"common name {q(cn)} doesn't match {q(cfg.cert_common_name_pattern)}")
+    if cfg.cert_dns_name_pattern:
+        off = [n for n in sans if not re.fullmatch(cfg.cert_dns_name_pattern, n)]
+        if off:
+            problems.append(f"DNS names {', '.join(off)} don't match {q(cfg.cert_dns_name_pattern)}")
+    missing = [n for n in requested if n not in sans]
+    if missing:
+        problems.append(f"requested DNS names missing: {', '.join(missing)}")
+    return problems
+
+
+@check("ingress-cert-manager", GROUP_INGRESS, "cert-manager issues a certificate with the expected names", SUITE)
 async def check_cert_manager(p: Probe) -> Outcome:
-    issuer = p.cfg.suites.ingress.cert_manager_issuer
+    cfg = p.cfg.suites.ingress
+    issuer = cfg.cert_manager_issuer
     if not issuer.name:
         return skipped("suites.ingress.certManager.issuer.name is empty")
+    for key, pattern in (
+        ("commonNamePattern", cfg.cert_common_name_pattern),
+        ("dnsNamePattern", cfg.cert_dns_name_pattern),
+    ):
+        try:
+            re.compile(pattern)
+        except re.error as e:
+            return failed(f"suites.ingress.certManager.expect.{key} isn't a valid regular expression: {e}")
     cert_name = scratch.name(p, "cert")
+    secret = f"{p.cfg.release}-probe-certificate"
+    dns_names = [_render(t, p) for t in cfg.cert_dns_names] or [f"{cert_name}.{scratch.ns(p)}.svc"]
+    spec = {
+        # One Secret per release, reissued every run as long as a name changes with {run}.
+        "secretName": secret,
+        "dnsNames": dns_names,
+        "issuerRef": {"name": issuer.name, "kind": issuer.kind, "group": "cert-manager.io"},
+    }
+    if cfg.cert_common_name:
+        spec["commonName"] = _render(cfg.cert_common_name, p)
     cert = {
         "apiVersion": "cert-manager.io/v1",
         "kind": "Certificate",
         "metadata": scratch.meta(p, cert_name),
-        "spec": {
-            # One Secret per release, reissued every run: the dnsName changes with the run ID.
-            "secretName": f"{p.cfg.release}-probe-certificate",
-            "dnsNames": [f"{cert_name}.{scratch.ns(p)}.svc"],
-            "issuerRef": {"name": issuer.name, "kind": issuer.kind, "group": "cert-manager.io"},
-        },
+        "spec": spec,
     }
     try:
         await p.kube.create(scratch.path(p, "/apis/cert-manager.io/v1/certificates"), cert)
@@ -191,12 +234,35 @@ async def check_cert_manager(p: Probe) -> Outcome:
     c = await scratch.wait_for(
         lambda: p.kube.get(scratch.path(p, "/apis/cert-manager.io/v1/certificates", cert_name)),
         lambda o: kube.find(kube.status_conditions(o), "Ready").status == "True",
-        120,
+        CERT_TIMEOUT,
     )
     ready = kube.find(kube.status_conditions(c), "Ready")
+    asked = f"CN {spec['commonName']}, " if "commonName" in spec else ""
+    asked += "DNS " + ", ".join(dns_names)
     if ready.status != "True":
         return failed(
-            f"{issuer.kind}/{issuer.name}: not Ready after 120s: {first_non_empty(ready.message, ready.reason, 'no status')}",
-            "kubectl describe certificaterequest in the scratch namespace shows what the issuer said.",
+            f"{issuer.kind}/{issuer.name} for {asked}: not Ready after {CERT_TIMEOUT:.0f}s: "
+            f"{first_non_empty(ready.message, ready.reason, 'no status')}",
+            "A refusal from the issuer (e.g. a Vault role's allowed_domains) shows in kubectl describe "
+            "certificaterequest in the scratch namespace; certManager.commonName and dnsNames set what is asked for.",
         )
-    return passed(f"{issuer.kind}/{issuer.name} issued it, valid until {(c.get('status') or {}).get('notAfter', '?')}")
+    # Read back what was issued, from a pod that mounts the Secret: the console can't read Secrets.
+    run = await scratch.run_task(
+        p,
+        "certinfo",
+        "certinfo",
+        {"path": "/tls/tls.crt"},
+        volumes=[{"name": "tls", "secret": {"secretName": secret}}],
+        mounts=[{"name": "tls", "mountPath": "/tls", "readOnly": True}],
+    )
+    if not run.ok:
+        return failed(f"{issuer.kind}/{issuer.name} issued it, but reading it back failed: {run.explain()}")
+    info = run.data
+    problems = _name_problems(info, cfg, dns_names)
+    got = f"CN {q(info.get('commonName', ''))}, DNS {', '.join(info.get('dnsNames') or []) or 'none'}"
+    if problems:
+        return failed(f"{issuer.kind}/{issuer.name} issued {got}: " + "; ".join(problems))
+    detail = f"{issuer.kind}/{issuer.name} issued {got}, valid until {info.get('notAfter', '?')}"
+    if not any("{run}" in t for t in [cfg.cert_common_name, *cfg.cert_dns_names]) and cfg.cert_dns_names:
+        detail += " (no name changes with {run}, so cert-manager may have kept last run's certificate)"
+    return passed(detail)

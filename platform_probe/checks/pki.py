@@ -67,7 +67,6 @@ async def _issue(p: Probe) -> tuple[str, float, str]:
         "metadata": scratch.meta(p, cert_name),
         "spec": {
             "secretName": o.secret,
-            "commonName": names[-1],
             # A name only this run uses, so the Certificate differs from what the Secret holds
             # and cert-manager issues a new one every run.
             "dnsNames": [*names, f"{scratch.name(p, 'run')}.{names[-1]}"],
@@ -75,6 +74,11 @@ async def _issue(p: Probe) -> tuple[str, float, str]:
             "issuerRef": {"name": o.issuer.name, "kind": o.issuer.kind, "group": "cert-manager.io"},
         },
     }
+    # A common name only if one fits: X.509 allows 64 characters, and a Service's full name is
+    # often longer. The DNS names carry every name anyway.
+    common = next((n for n in reversed(names) if len(n) <= 64), "")
+    if common:
+        cert["spec"]["commonName"] = common
     start = time.monotonic()
     try:
         await p.kube.create(scratch.path(p, CERTS), cert)

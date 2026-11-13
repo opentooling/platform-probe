@@ -19,6 +19,7 @@ PODS = f"/api/v1/namespaces/{NS}/pods"
 @pytest.fixture(autouse=True)
 def fast_polling(monkeypatch):
     monkeypatch.setattr(scratch, "POLL", 0)
+    monkeypatch.setattr(ingress, "CERT_TIMEOUT", 0.2)
 
 
 def make_probe(fake: FakeKube, **suites) -> Probe:
@@ -411,7 +412,10 @@ def test_cert_manager(tmp_path):
     assert go(p, ingress.check_cert_manager).status == Status.SKIP
     p.cfg.suites.ingress.cert_manager_issuer.name = "internal-ca"
     out = go(p, ingress.check_cert_manager)
-    assert out.status == Status.PASS and "ClusterIssuer/internal-ca issued it" in out.detail, out
+    assert out.status == Status.PASS, out
+    assert out.detail.startswith(
+        'ClusterIssuer/internal-ca issued CN "", DNS probe-cert-run1.platform-probe-scratch.svc'
+    )
 
 
 def test_whole_run_cleans_up(tmp_path):
@@ -473,3 +477,76 @@ def test_fetch_task_reports_certificate(tmp_path, server_ssl, server_cert, monke
     ), trusted
     assert 80 < trusted["cert"]["days"] <= 90
     assert unverified["status"] == 200
+
+
+def vault_probe(fake, **cert_manager):
+    p = make_probe(fake, ingress={"enabled": True})
+    c = p.cfg.suites.ingress
+    c.cert_manager_issuer.name = "vault"
+    for k, v in cert_manager.items():
+        setattr(c, k, v)
+    return p
+
+
+def test_cert_manager_names_follow_the_pattern(tmp_path):
+    fake = FakeKube(tmp_path)
+    p = vault_probe(
+        fake,
+        cert_common_name="probe-{run}.svc.example.com",
+        cert_dns_names=["probe-{run}.svc.example.com", "probe-{run}.{namespace}.example.com"],
+        cert_common_name_pattern=r"[a-z0-9-]+\.svc\.example\.com",
+        cert_dns_name_pattern=r"[a-z0-9.-]+\.example\.com",
+    )
+    out = go(p, ingress.check_cert_manager)
+    assert out.status == Status.PASS, out
+    assert (
+        'CN "probe-run1.svc.example.com", DNS probe-run1.svc.example.com, probe-run1.platform-probe-scratch.example.com'
+        in out.detail
+    )
+    cert = fake.items(f"/apis/cert-manager.io/v1/namespaces/{NS}/certificates")[0]
+    assert cert["spec"]["commonName"] == "probe-run1.svc.example.com"
+    assert "kept last run" not in out.detail
+
+
+def test_cert_manager_issued_names_checked(tmp_path):
+    fake = FakeKube(tmp_path)
+    p = vault_probe(
+        fake,
+        cert_common_name="probe-{run}.svc.example.com",
+        cert_dns_names=["probe-{run}.svc.example.com"],
+        cert_common_name_pattern=r".+\.svc\.example\.com",
+        cert_dns_name_pattern=r".+\.example\.com",
+    )
+    # The issuer drops the common name and adds a name outside the pattern.
+    fake.issue = lambda spec: ("", [*spec["dnsNames"], "extra.other.net"])
+    out = go(p, ingress.check_cert_manager)
+    assert out.status == Status.FAIL, out
+    assert "no common name" in out.detail and "DNS names extra.other.net don't match" in out.detail
+
+
+def test_cert_manager_refusal_names_what_was_asked(tmp_path):
+    fake = FakeKube(tmp_path)
+    fake.cert_status = {
+        "conditions": [
+            {"type": "Ready", "status": "False", "message": "common name probe-run1.bad.net not allowed by this role"}
+        ]
+    }
+    p = vault_probe(fake, cert_common_name="probe-{run}.bad.net", cert_dns_names=["probe-{run}.bad.net"])
+    out = go(p, ingress.check_cert_manager)
+    assert out.status == Status.FAIL, out
+    assert (
+        "for CN probe-run1.bad.net, DNS probe-run1.bad.net" in out.detail and "not allowed by this role" in out.detail
+    )
+    assert "allowed_domains" in out.hint
+
+
+def test_cert_manager_fixed_names_warn(tmp_path):
+    fake = FakeKube(tmp_path)
+    p = vault_probe(fake, cert_common_name="probe.svc.example.com", cert_dns_names=["probe.svc.example.com"])
+    out = go(p, ingress.check_cert_manager)
+    assert out.status == Status.PASS and "kept last run" in out.detail, out
+
+
+def test_cert_manager_bad_pattern(tmp_path):
+    out = go(vault_probe(FakeKube(tmp_path), cert_dns_name_pattern="probe-(["), ingress.check_cert_manager)
+    assert out.status == Status.FAIL and "dnsNamePattern isn't a valid regular expression" in out.detail, out

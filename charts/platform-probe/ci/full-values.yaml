@@ -34,7 +34,12 @@ suites:
     enabled: true
     certManager:
       issuer:
-        name: internal-ca
+        name: vault
+      commonName: "probe-{run}.apps.example.com"
+      dnsNames: ["probe-{run}.apps.example.com", "probe-{run}.{namespace}.apps.example.com"]
+      expect:
+        commonNamePattern: '[a-z0-9-]+\.apps\.example\.com'
+        dnsNamePattern: '[a-z0-9.-]+\.apps\.example\.com'
   pki:
     enabled: true
     issuer:

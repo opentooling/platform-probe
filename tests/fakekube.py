@@ -31,10 +31,13 @@ class FakeKube:
         self.route_admitted = True
         self.calls: list[tuple[str, str]] = []
         self.emitted: list[dict] = []
+        # A test Application's status instead of Synced/Healthy.
         self.argo_result: dict | None = None
-        self.cert_status: dict | None = (
-            None  # a Certificate's status instead of Ready  # a test Application's status instead of Synced/Healthy
-        )
+        # A Certificate's status instead of Ready.
+        self.cert_status: dict | None = None
+        # What the issuer puts in the certificate, from the Certificate's spec: (CN, DNS names).
+        # None = what was asked for.
+        self.issue = None
 
     # --- storage ---
 
@@ -136,6 +139,38 @@ class FakeKube:
 
     # --- what controllers and the kubelet would do ---
 
+    def secret_dir(self, name: str) -> Path:
+        d = self.tmp / "secrets" / name
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def write_cert(self, secret: str, common_name: str, dns_names: list[str]) -> None:
+        """Issue a certificate into a Secret, as cert-manager would."""
+        import datetime
+
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.x509.oid import NameOID
+
+        key = ec.generate_private_key(ec.SECP256R1())
+        now = datetime.datetime.now(datetime.UTC)
+        subject = [x509.NameAttribute(NameOID.COMMON_NAME, common_name)] if common_name else []
+        builder = (
+            x509.CertificateBuilder()
+            .subject_name(x509.Name(subject))
+            .issuer_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "vault-pki")]))
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now)
+            .not_valid_after(now + datetime.timedelta(days=30))
+        )
+        if dns_names:
+            san = x509.SubjectAlternativeName([x509.DNSName(n) for n in dns_names])
+            builder = builder.add_extension(san, critical=False)
+        cert = builder.sign(key, hashes.SHA256())
+        (self.secret_dir(secret) / "tls.crt").write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+
     def volume_dir(self, claim: str) -> Path:
         d = self.tmp / "volumes" / claim
         d.mkdir(parents=True, exist_ok=True)
@@ -159,6 +194,10 @@ class FakeKube:
                 "resources": [{"kind": "ConfigMap", "name": "platform-probe-argocd"}],
             }
         elif coll.endswith("/certificates") and not obj.get("status"):
+            if not self.cert_status:
+                spec = obj["spec"]
+                issued = self.issue(spec) if self.issue else (spec.get("commonName", ""), spec.get("dnsNames", []))
+                self.write_cert(spec["secretName"], *issued)
             obj["status"] = copy.deepcopy(self.cert_status) or {
                 "conditions": [{"type": "Ready", "status": "True"}],
                 "notAfter": "2027-02-07T00:00:00Z",
@@ -192,9 +231,15 @@ class FakeKube:
             for v in pod["spec"].get("volumes", [])
             if "persistentVolumeClaim" in v
         }
+        secrets = {v["name"]: v["secret"]["secretName"] for v in pod["spec"].get("volumes", []) if "secret" in v}
         for m in c.get("volumeMounts", []):
-            if m["name"] in claims and "path" in args and args["path"].startswith(m["mountPath"]):
-                args["path"] = str(self.volume_dir(claims[m["name"]])) + args["path"][len(m["mountPath"]) :]
+            if "path" not in args or not args["path"].startswith(m["mountPath"]):
+                continue
+            rest = args["path"][len(m["mountPath"]) :]
+            if m["name"] in claims:
+                args["path"] = str(self.volume_dir(claims[m["name"]])) + rest
+            elif m["name"] in secrets:
+                args["path"] = str(self.secret_dir(secrets[m["name"]])) + rest
         if name == "emit":
             # Long-running: it logs and serves its metric until the run deletes it.
             self.emitted.append(args)

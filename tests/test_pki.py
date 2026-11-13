@@ -85,6 +85,8 @@ def test_certificate_names_and_reissue(tmp_path):
     assert names[:4] == [SVC, f"{SVC}.{NS}", f"{SVC}.{NS}.svc", f"{SVC}.{NS}.svc.cluster.local"]
     # A name unique to the run, so cert-manager issues anew instead of keeping the Secret.
     assert "run1" in names[4] and cert["spec"]["secretName"] == "probe-platform-probe-pki-tls"
+    # svc.ns.svc.cluster.local is 65 characters here, over X.509's 64 for a common name.
+    assert cert["spec"]["commonName"] == f"{SVC}.{NS}.svc"
 
 
 def test_certificate_not_issued(tmp_path):

@@ -86,6 +86,28 @@ def fetch(requests: list[dict]) -> dict:
     return {"results": [_fetch_one(**r) for r in requests]}
 
 
+def certinfo(path: str) -> dict:
+    """The subject, names, issuer and expiry of the first certificate in a PEM file."""
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+
+    with open(path, "rb") as f:
+        cert = x509.load_pem_x509_certificate(f.read())
+    cn = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
+    try:
+        sans = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value.get_values_for_type(
+            x509.DNSName
+        )
+    except x509.ExtensionNotFound:
+        sans = []
+    return {
+        "commonName": str(cn[0].value) if cn else "",
+        "dnsNames": list(sans),
+        "issuer": cert.issuer.rfc4514_string(),
+        "notAfter": cert.not_valid_after_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+
 def write(path: str, data: str) -> dict:
     with open(path, "w", encoding="utf-8") as f:
         f.write(data)
@@ -211,7 +233,15 @@ def otlp(
     return out
 
 
-TASKS = {"fetch": fetch, "write": write, "read": read, "whoami": whoami, "emit": emit, "otlp": otlp}
+TASKS = {
+    "certinfo": certinfo,
+    "fetch": fetch,
+    "write": write,
+    "read": read,
+    "whoami": whoami,
+    "emit": emit,
+    "otlp": otlp,
+}
 
 
 def main(argv: list[str]) -> int:

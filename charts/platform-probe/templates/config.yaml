@@ -86,7 +86,11 @@
     "ingress" (dict
       "enabled" $v.suites.ingress.enabled
       "certExpiryDays" (int $v.suites.ingress.certExpiryDays)
-      "certManagerIssuer" (dict "name" $v.suites.ingress.certManager.issuer.name "kind" $v.suites.ingress.certManager.issuer.kind))
+      "certManagerIssuer" (dict "name" $v.suites.ingress.certManager.issuer.name "kind" $v.suites.ingress.certManager.issuer.kind)
+      "certCommonName" $v.suites.ingress.certManager.commonName
+      "certDnsNames" $v.suites.ingress.certManager.dnsNames
+      "certCommonNamePattern" $v.suites.ingress.certManager.expect.commonNamePattern
+      "certDnsNamePattern" $v.suites.ingress.certManager.expect.dnsNamePattern)
     "workloads" (dict
       "enabled" $v.suites.workloads.enabled
       "expectedScc" $v.suites.workloads.expectedScc

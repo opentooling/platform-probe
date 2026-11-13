@@ -163,6 +163,15 @@ class IngressSuite:
     cert_expiry_days: int = 14
     # A cert-manager issuer to test, or empty to skip the cert-manager check.
     cert_manager_issuer: IssuerRef = field(default_factory=IssuerRef)
+    # What the test Certificate asks for, as templates with {run}, {namespace} and {release}:
+    # names the issuer (e.g. a Vault PKI role) allows. Empty = no common name, and the DNS name
+    # probe-cert-{run}.{namespace}.svc.
+    cert_common_name: str = ""
+    cert_dns_names: list[str] = field(default_factory=list)
+    # Regular expressions the issued certificate must match: its common name (which must then
+    # be present) and every DNS name. Empty = not checked.
+    cert_common_name_pattern: str = ""
+    cert_dns_name_pattern: str = ""
 
 
 @dataclass

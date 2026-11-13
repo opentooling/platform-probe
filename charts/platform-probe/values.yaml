@@ -182,10 +182,25 @@ suites:
     # Fail when the router's certificate expires within this many days.
     certExpiryDays: 14
     certManager:
-      # An issuer to request a test certificate from. Empty = skip the cert-manager check.
+      # An issuer to request a test certificate from (e.g. a Vault ClusterIssuer). Empty = skip
+      # the cert-manager check.
       issuer:
         name: ""
         kind: ClusterIssuer
+      # What the test Certificate asks for: names the issuer allows (a Vault PKI role's
+      # allowed_domains). {run} (changes every run, so the issuer issues anew), {namespace}
+      # (the scratch namespace) and {release} are filled in. Empty = no common name, and the
+      # DNS name probe-cert-{run}.{namespace}.svc.
+      #   commonName: "probe-{run}.apps.example.com"
+      #   dnsNames: ["probe-{run}.apps.example.com"]
+      commonName: ""
+      dnsNames: []
+      # What the issued certificate must look like, as regular expressions over the whole name.
+      # With commonNamePattern, a certificate without a common name fails too. A pod reads the
+      # certificate from its Secret; the console needs no access to Secrets.
+      expect:
+        commonNamePattern: ""
+        dnsNamePattern: ""
   # SCC and Pod Security: the UID and SCC a tenant pod gets, and that privileged, root,
   # hostPath and hostNetwork pods are refused (server-side dry runs: nothing is created).
   workloads:
